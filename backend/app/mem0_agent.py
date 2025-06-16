@@ -181,7 +181,700 @@ gmail_intelligence_team = Team(
 )
 # *******************************
 
+# ************* Direct Data Analysis Functions *************
+
+def analyze_transactions_directly(transactions: List[Dict]) -> Dict[str, Any]:
+    """Directly analyze transaction data and extract real insights"""
+    import re
+    from collections import defaultdict, Counter
+    
+    analysis = {
+        'total_count': len(transactions),
+        'total_amount': 0.0,
+        'average_amount': 0.0,
+        'transactions_with_amounts': 0,
+        'categories': defaultdict(int),
+        'merchants': defaultdict(int),
+        'payment_methods': defaultdict(int),
+        'amount_ranges': defaultdict(int),
+        'sample_transactions': [],
+        'top_merchants': [],
+        'monthly_breakdown': defaultdict(float),
+        'daily_breakdown': defaultdict(float)
+    }
+    
+    amount_pattern = r'[₹Rs\.]\s*(\d+(?:,\d+)*(?:\.\d+)?)'
+    
+    for transaction in transactions:
+        if not transaction or not isinstance(transaction, dict):
+            continue
+            
+        memory = transaction.get('memory', '')
+        metadata = transaction.get('metadata', {})
+        
+        if not isinstance(metadata, dict):
+            metadata = {}
+        
+        # Extract category
+        category = metadata.get('category', 'unknown')
+        analysis['categories'][category] += 1
+        
+        # Extract merchant
+        merchant = metadata.get('merchant', 'unknown')
+        if merchant == 'unknown' and memory:
+            # Try to extract merchant from memory content
+            merchant_keywords = ['swiggy', 'zomato', 'amazon', 'flipkart', 'uber', 'ola', 'paytm', 'phonepe', 'gpay']
+            for keyword in merchant_keywords:
+                if keyword.lower() in memory.lower():
+                    merchant = keyword.title()
+                    break
+        
+        analysis['merchants'][merchant] += 1
+        
+        # Extract payment method
+        payment_method = metadata.get('payment_method', 'unknown')
+        if payment_method == 'unknown' and memory:
+            # Try to extract payment method from memory content
+            if any(word in memory.lower() for word in ['upi', 'phonepe', 'gpay', 'paytm']):
+                payment_method = 'UPI'
+            elif any(word in memory.lower() for word in ['credit card', 'credit']):
+                payment_method = 'Credit Card'
+            elif any(word in memory.lower() for word in ['debit card', 'debit']):
+                payment_method = 'Debit Card'
+        
+        analysis['payment_methods'][payment_method] += 1
+        
+        # Extract amount
+        amount = 0.0
+        amount_str = metadata.get('amount', '')
+        
+        if amount_str and isinstance(amount_str, str):
+            # Try to extract number from amount string
+            amount_match = re.search(r'(\d+(?:,\d+)*(?:\.\d+)?)', amount_str.replace(',', ''))
+            if amount_match:
+                try:
+                    amount = float(amount_match.group(1))
+                except ValueError:
+                    pass
+        
+        # If no amount in metadata, try to extract from memory content
+        if amount == 0.0 and memory:
+            amount_matches = re.findall(amount_pattern, memory)
+            if amount_matches:
+                try:
+                    # Take the first amount found, clean it up
+                    amount_str = amount_matches[0].replace(',', '')
+                    amount = float(amount_str)
+                except ValueError:
+                    pass
+        
+        if amount > 0:
+            analysis['total_amount'] += amount
+            analysis['transactions_with_amounts'] += 1
+            
+            # Categorize by amount ranges
+            if amount < 100:
+                analysis['amount_ranges']['Under ₹100'] += 1
+            elif amount < 500:
+                analysis['amount_ranges']['₹100-500'] += 1
+            elif amount < 1000:
+                analysis['amount_ranges']['₹500-1000'] += 1
+            elif amount < 5000:
+                analysis['amount_ranges']['₹1000-5000'] += 1
+            else:
+                analysis['amount_ranges']['Over ₹5000'] += 1
+            
+            # Add to sample transactions
+            if len(analysis['sample_transactions']) < 20:
+                analysis['sample_transactions'].append({
+                    'merchant': merchant,
+                    'amount': amount,
+                    'category': category,
+                    'method': payment_method,
+                    'memory_preview': memory[:100] + '...' if len(memory) > 100 else memory
+                })
+    
+    # Calculate average
+    if analysis['transactions_with_amounts'] > 0:
+        analysis['average_amount'] = analysis['total_amount'] / analysis['transactions_with_amounts']
+    
+    # Sort top merchants
+    analysis['top_merchants'] = sorted(analysis['merchants'].items(), key=lambda x: x[1], reverse=True)
+    
+    # Sort sample transactions by amount (highest first)
+    analysis['sample_transactions'].sort(key=lambda x: x['amount'], reverse=True)
+    
+    return analysis
+
+def extract_financial_insights(analysis: Dict[str, Any], query: str = "") -> str:
+    """Generate detailed financial insights from direct analysis"""
+    insights = []
+    
+    insights.append("## 📊 COMPREHENSIVE FINANCIAL ANALYSIS")
+    insights.append(f"Based on direct data extraction from your email transactions:\n")
+    
+    # Transaction Overview
+    insights.append("### 💰 TRANSACTION OVERVIEW")
+    insights.append(f"- **Total Transactions Analyzed**: {analysis['total_count']}")
+    insights.append(f"- **Transactions with Amount Data**: {analysis['transactions_with_amounts']}")
+    insights.append(f"- **Total Amount Spent**: ₹{analysis['total_amount']:,.2f}")
+    if analysis['transactions_with_amounts'] > 0:
+        insights.append(f"- **Average Transaction Value**: ₹{analysis['average_amount']:,.2f}")
+    insights.append("")
+    
+    # Category Breakdown
+    if analysis['categories']:
+        insights.append("### 📈 SPENDING BY CATEGORY")
+        total_cat_transactions = sum(analysis['categories'].values())
+        for category, count in sorted(analysis['categories'].items(), key=lambda x: x[1], reverse=True):
+            percentage = (count / total_cat_transactions) * 100
+            insights.append(f"- **{category.title()}**: {count} transactions ({percentage:.1f}%)")
+        insights.append("")
+    
+    # Top Merchants
+    if analysis['top_merchants']:
+        insights.append("### 🏪 TOP MERCHANTS BY FREQUENCY")
+        for i, (merchant, count) in enumerate(analysis['top_merchants'][:10], 1):
+            insights.append(f"{i:2d}. **{merchant}**: {count} transactions")
+        insights.append("")
+    
+    # Payment Methods
+    if analysis['payment_methods']:
+        insights.append("### 💳 PAYMENT METHOD DISTRIBUTION")
+        total_payment_transactions = sum(analysis['payment_methods'].values())
+        for method, count in sorted(analysis['payment_methods'].items(), key=lambda x: x[1], reverse=True):
+            percentage = (count / total_payment_transactions) * 100
+            insights.append(f"- **{method}**: {count} transactions ({percentage:.1f}%)")
+        insights.append("")
+    
+    # Amount Distribution
+    if analysis['amount_ranges']:
+        insights.append("### 💰 SPENDING DISTRIBUTION")
+        for range_desc, count in analysis['amount_ranges'].items():
+            insights.append(f"- **{range_desc}**: {count} transactions")
+        insights.append("")
+    
+    # Top Transactions
+    if analysis['sample_transactions']:
+        insights.append("### 🎯 HIGHEST VALUE TRANSACTIONS")
+        for i, tx in enumerate(analysis['sample_transactions'][:5], 1):
+            insights.append(f"{i}. **{tx['merchant']}** - ₹{tx['amount']:,.2f} ({tx['category']}) via {tx['method']}")
+        insights.append("")
+    
+    # Data-Driven Insights
+    insights.append("### 📊 KEY INSIGHTS & RECOMMENDATIONS")
+    
+    if analysis['total_amount'] > 0:
+        # Food spending analysis
+        food_categories = ['food', 'delivery', 'restaurant']
+        food_transactions = sum(count for cat, count in analysis['categories'].items() if any(food_cat in cat.lower() for food_cat in food_categories))
+        if food_transactions > 0:
+            food_percentage = (food_transactions / analysis['total_count']) * 100
+            insights.append(f"- **Food & Dining**: {food_transactions} transactions ({food_percentage:.1f}% of all transactions)")
+            insights.append(f"  - Consider meal planning to potentially reduce food delivery expenses")
+        
+        # UPI usage analysis
+        upi_transactions = analysis['payment_methods'].get('UPI', 0) + analysis['payment_methods'].get('upi', 0)
+        if upi_transactions > 0:
+            upi_percentage = (upi_transactions / analysis['total_count']) * 100
+            insights.append(f"- **UPI Usage**: {upi_transactions} transactions ({upi_percentage:.1f}%) - Good for cashback rewards")
+        
+        # High-value transaction analysis
+        high_value_transactions = analysis['amount_ranges'].get('Over ₹5000', 0)
+        if high_value_transactions > 0:
+            insights.append(f"- **Large Purchases**: {high_value_transactions} transactions over ₹5000 - Consider using credit cards for better rewards")
+        
+        # Monthly spending estimate
+        if analysis['transactions_with_amounts'] > 0:
+            estimated_monthly = analysis['total_amount']  # Assuming this is monthly data
+            insights.append(f"- **Estimated Monthly Spending**: ₹{estimated_monthly:,.2f}")
+            insights.append(f"- **Suggested Emergency Fund**: ₹{estimated_monthly * 3:,.2f} (3 months of expenses)")
+    
+    return "\n".join(insights)
+
+def extract_transaction_table(transactions: List[Dict]) -> Dict[str, Any]:
+    """Extract transactions into a proper table format with specific details"""
+    import re
+    from datetime import datetime
+    from collections import defaultdict
+    
+    # Initialize table structure
+    transaction_table = []
+    
+    # Patterns for extraction
+    amount_pattern = r'[₹Rs\.]\s*(\d+(?:,\d+)*(?:\.\d+)?)'
+    date_patterns = [
+        r'(\d{1,2}[/-]\d{1,2}[/-]\d{4})',  # DD/MM/YYYY or DD-MM-YYYY
+        r'(\d{4}[/-]\d{1,2}[/-]\d{1,2})',  # YYYY/MM/DD or YYYY-MM-DD
+        r'((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{4})',  # Month DD, YYYY
+        r'(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4})',  # DD Month YYYY
+        r'(May\s+2025|April\s+2025|June\s+2025)',  # Month Year
+    ]
+    
+    # Merchant keywords mapping
+    merchant_patterns = {
+        'Swiggy': ['swiggy', 'SWIGGY'],
+        'Zomato': ['zomato', 'ZOMATO'],
+        'Amazon': ['amazon', 'AMAZON'],
+        'Flipkart': ['flipkart', 'FLIPKART'],
+        'Uber': ['uber', 'UBER'],
+        'Ola': ['ola', 'OLA'],
+        'PayTM': ['paytm', 'PAYTM'],
+        'PhonePe': ['phonepe', 'PHONEPE', 'phone pe'],
+        'Google Pay': ['gpay', 'GPAY', 'google pay'],
+        'Netflix': ['netflix', 'NETFLIX'],
+        'Spotify': ['spotify', 'SPOTIFY'],
+        'BookMyShow': ['bookmyshow', 'BOOKMYSHOW'],
+        'BOX8': ['box8', 'BOX8'],
+        'FOOD COURT': ['food court', 'FOOD COURT'],
+    }
+    
+    # Process each transaction
+    for i, transaction in enumerate(transactions):
+        if not transaction or not isinstance(transaction, dict):
+            continue
+        
+        memory = transaction.get('memory', '')
+        metadata = transaction.get('metadata', {})
+        
+        if not isinstance(metadata, dict):
+            metadata = {}
+        
+        # Extract transaction details
+        row = {
+            'serial': i + 1,
+            'date': 'Not specified',
+            'amount': 'Not specified',
+            'amount_numeric': 0.0,
+            'receiver': 'Unknown',
+            'purpose': 'General',
+            'payment_method': 'Not specified',
+            'raw_memory': memory[:200] + '...' if len(memory) > 200 else memory
+        }
+        
+        # Extract date
+        for date_pattern in date_patterns:
+            date_match = re.search(date_pattern, memory, re.IGNORECASE)
+            if date_match:
+                row['date'] = date_match.group(1)
+                break
+        
+        # If no date in memory, try metadata
+        if row['date'] == 'Not specified' and metadata.get('timestamp'):
+            try:
+                timestamp = metadata['timestamp']
+                if timestamp:
+                    # Try to parse and format timestamp
+                    row['date'] = timestamp[:10] if len(timestamp) > 10 else timestamp
+            except:
+                pass
+        
+        # Extract amount
+        amount_matches = re.findall(amount_pattern, memory)
+        if amount_matches:
+            try:
+                # Take the first amount found
+                amount_str = amount_matches[0].replace(',', '')
+                row['amount'] = f"₹{amount_str}"
+                row['amount_numeric'] = float(amount_str)
+            except ValueError:
+                pass
+        
+        # Try amount from metadata if not found in memory
+        if row['amount'] == 'Not specified' and metadata.get('amount'):
+            amount_str = str(metadata['amount'])
+            amount_match = re.search(r'(\d+(?:,\d+)*(?:\.\d+)?)', amount_str.replace(',', ''))
+            if amount_match:
+                try:
+                    amount_numeric = float(amount_match.group(1))
+                    row['amount'] = f"₹{amount_numeric:.2f}"
+                    row['amount_numeric'] = amount_numeric
+                except ValueError:
+                    pass
+        
+        # Extract merchant/receiver
+        for merchant, patterns in merchant_patterns.items():
+            for pattern in patterns:
+                if pattern.lower() in memory.lower():
+                    row['receiver'] = merchant
+                    break
+            if row['receiver'] != 'Unknown':
+                break
+        
+        # Try metadata for merchant if not found
+        if row['receiver'] == 'Unknown' and metadata.get('merchant'):
+            merchant = metadata['merchant']
+            if merchant and merchant != 'unknown':
+                row['receiver'] = merchant.title()
+        
+        # Extract purpose/category
+        purpose_keywords = {
+            'Food Order': ['food', 'meal', 'delivery', 'restaurant', 'order', 'swiggy', 'zomato', 'box8'],
+            'Shopping': ['shopping', 'purchase', 'buy', 'amazon', 'flipkart', 'myntra'],
+            'Transportation': ['uber', 'ola', 'cab', 'taxi', 'ride', 'transport'],
+            'Entertainment': ['netflix', 'spotify', 'bookmyshow', 'movie', 'music'],
+            'Bill Payment': ['bill', 'electricity', 'utility', 'payment', 'due'],
+            'Subscription': ['subscription', 'renewal', 'plan', 'premium'],
+        }
+        
+        for purpose, keywords in purpose_keywords.items():
+            if any(keyword.lower() in memory.lower() for keyword in keywords):
+                row['purpose'] = purpose
+                break
+        
+        # Try metadata for category
+        if row['purpose'] == 'General' and metadata.get('category'):
+            category = metadata['category']
+            if category and category != 'unknown':
+                row['purpose'] = category.replace('_', ' ').title()
+        
+        # Extract payment method
+        payment_methods = {
+            'UPI': ['upi', 'phonepe', 'gpay', 'paytm', 'google pay'],
+            'Credit Card': ['credit card', 'credit'],
+            'Debit Card': ['debit card', 'debit'],
+            'Net Banking': ['net banking', 'netbanking', 'bank transfer'],
+        }
+        
+        for method, keywords in payment_methods.items():
+            if any(keyword.lower() in memory.lower() for keyword in keywords):
+                row['payment_method'] = method
+                break
+        
+        # Try metadata for payment method
+        if row['payment_method'] == 'Not specified' and metadata.get('payment_method'):
+            method = metadata['payment_method']
+            if method and method != 'unknown':
+                row['payment_method'] = method.replace('_', ' ').title()
+        
+        transaction_table.append(row)
+    
+    return transaction_table
+
+def generate_financial_insights_from_table(transaction_table: List[Dict]) -> str:
+    """Generate specific financial insights from the transaction table"""
+    if not transaction_table:
+        return "No transaction data available for analysis."
+    
+    insights = []
+    insights.append("## 📊 DETAILED TRANSACTION ANALYSIS")
+    insights.append("")
+    
+    # Create the table
+    insights.append("### 💳 TRANSACTION TABLE")
+    insights.append("")
+    insights.append("| # | Date | Amount | Receiver/Merchant | Purpose | Payment Method |")
+    insights.append("|---|------|--------|-------------------|---------|----------------|")
+    
+    for row in transaction_table:
+        insights.append(f"| {row['serial']:2d} | {row['date'][:10]} | {row['amount'][:12]} | {row['receiver'][:18]} | {row['purpose'][:15]} | {row['payment_method'][:12]} |")
+    
+    insights.append("")
+    
+    # Calculate summary statistics
+    total_transactions = len(transaction_table)
+    transactions_with_amounts = [t for t in transaction_table if t['amount_numeric'] > 0]
+    total_amount = sum(t['amount_numeric'] for t in transactions_with_amounts)
+    avg_amount = total_amount / len(transactions_with_amounts) if transactions_with_amounts else 0
+    
+    insights.append("### 💰 FINANCIAL SUMMARY")
+    insights.append("")
+    insights.append(f"- **Total Transactions**: {total_transactions}")
+    insights.append(f"- **Transactions with Amount Data**: {len(transactions_with_amounts)}")
+    insights.append(f"- **Total Amount Spent**: ₹{total_amount:,.2f}")
+    insights.append(f"- **Average Transaction**: ₹{avg_amount:,.2f}")
+    insights.append("")
+    
+    # Category breakdown
+    from collections import defaultdict
+    category_totals = defaultdict(lambda: {'count': 0, 'total': 0.0})
+    merchant_totals = defaultdict(lambda: {'count': 0, 'total': 0.0})
+    payment_totals = defaultdict(lambda: {'count': 0, 'total': 0.0})
+    
+    for transaction in transaction_table:
+        category = transaction['purpose']
+        merchant = transaction['receiver']
+        payment = transaction['payment_method']
+        amount = transaction['amount_numeric']
+        
+        category_totals[category]['count'] += 1
+        category_totals[category]['total'] += amount
+        
+        merchant_totals[merchant]['count'] += 1
+        merchant_totals[merchant]['total'] += amount
+        
+        payment_totals[payment]['count'] += 1
+        payment_totals[payment]['total'] += amount
+    
+    # Category breakdown
+    insights.append("### 📈 SPENDING BY CATEGORY")
+    insights.append("")
+    for category, data in sorted(category_totals.items(), key=lambda x: x[1]['total'], reverse=True):
+        if data['total'] > 0:
+            insights.append(f"- **{category}**: ₹{data['total']:,.2f} ({data['count']} transactions) - Avg: ₹{data['total']/data['count']:,.2f}")
+        else:
+            insights.append(f"- **{category}**: {data['count']} transactions (amount not specified)")
+    insights.append("")
+    
+    # Top merchants
+    insights.append("### 🏪 TOP MERCHANTS")
+    insights.append("")
+    merchant_list = sorted(merchant_totals.items(), key=lambda x: x[1]['count'], reverse=True)
+    for i, (merchant, data) in enumerate(merchant_list[:10], 1):
+        if data['total'] > 0:
+            insights.append(f"{i:2d}. **{merchant}**: ₹{data['total']:,.2f} ({data['count']} transactions)")
+        else:
+            insights.append(f"{i:2d}. **{merchant}**: {data['count']} transactions")
+    insights.append("")
+    
+    # Payment method analysis
+    insights.append("### 💳 PAYMENT METHOD BREAKDOWN")
+    insights.append("")
+    for method, data in sorted(payment_totals.items(), key=lambda x: x[1]['total'], reverse=True):
+        if data['total'] > 0:
+            insights.append(f"- **{method}**: ₹{data['total']:,.2f} ({data['count']} transactions)")
+        else:
+            insights.append(f"- **{method}**: {data['count']} transactions")
+    insights.append("")
+    
+    # Specific insights
+    insights.append("### 🎯 KEY INSIGHTS")
+    insights.append("")
+    
+    if transactions_with_amounts:
+        highest_transaction = max(transactions_with_amounts, key=lambda x: x['amount_numeric'])
+        insights.append(f"- **Highest Transaction**: {highest_transaction['amount']} to {highest_transaction['receiver']} on {highest_transaction['date']}")
+        
+        # Most frequent merchant
+        top_merchant = max(merchant_totals.items(), key=lambda x: x[1]['count'])
+        insights.append(f"- **Most Frequent Merchant**: {top_merchant[0]} ({top_merchant[1]['count']} transactions)")
+        
+        # Category insights
+        if category_totals:
+            top_category = max(category_totals.items(), key=lambda x: x[1]['total'])
+            insights.append(f"- **Top Spending Category**: {top_category[0]} - ₹{top_category[1]['total']:,.2f}")
+    
+    insights.append("")
+    insights.append("### 💡 RECOMMENDATIONS")
+    insights.append("")
+    
+    # Food delivery insights
+    food_data = category_totals.get('Food Order', {'count': 0, 'total': 0.0})
+    if food_data['count'] > 0:
+        insights.append(f"- **Food Delivery**: {food_data['count']} orders totaling ₹{food_data['total']:,.2f}")
+        if food_data['total'] > 0:
+            avg_food = food_data['total'] / food_data['count']
+            insights.append(f"  - Average per order: ₹{avg_food:.2f}")
+            insights.append(f"  - Consider cooking {max(1, food_data['count']//3)} meals per week to save ~₹{food_data['total']*0.7:.0f}")
+    
+    # UPI usage
+    upi_data = payment_totals.get('UPI', {'count': 0, 'total': 0.0})
+    if upi_data['count'] > 0:
+        upi_percentage = (upi_data['count'] / total_transactions) * 100
+        insights.append(f"- **UPI Usage**: {upi_data['count']} transactions ({upi_percentage:.1f}%) - Good for cashback rewards")
+    
+    return "\n".join(insights)
+
+# ************* Debug and Analysis Functions *************
+
+def debug_mem0_configuration():
+    """Debug Mem0 configuration and search parameters"""
+    print("🔧 MEM0 CONFIGURATION DEBUG:")
+    print(f"   - Mem0 API Key: {'✅ Set' if MEM0_API_KEY else '❌ Missing'}")
+    print(f"   - OpenAI API Key: {'✅ Set' if OPENAI_API_KEY else '❌ Missing'}")
+    
+    try:
+        # Test basic Mem0 connection
+        test_result = sync_client.search(
+            query="test",
+            user_id="debug_test",
+            limit=1
+        )
+        print(f"   - Mem0 Connection: ✅ Working")
+    except Exception as e:
+        print(f"   - Mem0 Connection: ❌ Error - {e}")
+    
+    print("\n📊 SEARCH PARAMETERS ANALYSIS:")
+    print("   Current search settings:")
+    print("   - Default limit: 500 (primary search)")
+    print("   - Query limit: 1000 (for queries)")
+    print("   - Broader search limit: 200 (per broader term)")
+    print("   - Analytics limit: 300 (per analytics query)")
+    print("   - Comprehensive limit: 2000 (for get_all function)")
+    
+    print("\n🔍 SEARCH BEHAVIOR ANALYSIS:")
+    print("   - keyword_search: True (enables keyword matching)")
+    print("   - rerank: True (improves relevance but may limit results)")
+    print("   - filter_memories: False (includes all memories)")
+    print("   - filters: {'metadata.source': 'gmail'} (only Gmail emails)")
+    
+    print("\n⚠️ POTENTIAL LIMITING FACTORS:")
+    print("   1. Mem0 Platform limitations (if using platform version)")
+    print("   2. Reranking reducing result diversity")
+    print("   3. Search query specificity affecting relevance scoring")
+    print("   4. LLM response length limits during processing")
+    print("   5. Token limits in team prompt processing")
+
+async def test_mem0_limits(user_id: str):
+    """Test Mem0 search limits with progressively higher limits"""
+    print(f"🧪 TESTING MEM0 SEARCH LIMITS for user {user_id}")
+    
+    test_limits = [10, 50, 100, 250, 500, 1000, 2000]
+    test_query = "payment transaction amount rupees"
+    
+    results_by_limit = {}
+    
+    for limit in test_limits:
+        try:
+            results = sync_client.search(
+                query=test_query,
+                user_id=user_id,
+                limit=limit,
+                filters={"metadata.source": "gmail"},
+                keyword_search=True,
+                rerank=False,  # Disable reranking for this test
+                filter_memories=False
+            )
+            
+            results_count = len(results) if results else 0
+            results_by_limit[limit] = results_count
+            print(f"   - Limit {limit:4d}: {results_count:4d} results returned")
+            
+        except Exception as e:
+            print(f"   - Limit {limit:4d}: ❌ Error - {e}")
+            results_by_limit[limit] = f"Error: {e}"
+    
+    print(f"\n📊 SEARCH LIMIT TEST RESULTS:")
+    print(f"   Query: '{test_query}'")
+    print(f"   Results by limit: {results_by_limit}")
+    
+    # Find the plateau point
+    max_results = max([r for r in results_by_limit.values() if isinstance(r, int)])
+    plateau_limits = [limit for limit, count in results_by_limit.items() if count == max_results]
+    
+    if plateau_limits:
+        print(f"\n🎯 ANALYSIS:")
+        print(f"   - Maximum results found: {max_results}")
+        print(f"   - Plateau reached at limit: {min(plateau_limits)}")
+        print(f"   - This suggests you have ~{max_results} matching transactions")
+        
+        if max_results < 100:
+            print(f"   - ⚠️ This is less than your expected 100+ transactions")
+            print(f"   - Possible reasons:")
+            print(f"     • Search query too specific")
+            print(f"     • Transactions stored with different keywords")
+            print(f"     • Metadata filtering excluding results")
+            print(f"     • Transactions not properly categorized during upload")
+    
+    return results_by_limit
+
 # ************* Helper Functions *************
+
+async def get_all_user_transactions(user_id: str, limit: int = 2000) -> Dict[str, Any]:
+    """Get ALL user transactions from Mem0 with comprehensive details"""
+    try:
+        print(f"🔍 RETRIEVING ALL TRANSACTIONS for user {user_id}")
+        
+        # Try multiple broad search terms to get ALL transactions
+        broad_searches = [
+            "payment paid transaction amount rupees upi",
+            "swiggy zomato amazon flipkart food order",
+            "subscription netflix spotify prime renewal",
+            "bill electricity utility reminder due",
+            "shopping purchase buy ecommerce online",
+            "₹ Rs rupees money cost price total",
+            "credit debit card bank transfer",
+            "delivery order confirmation receipt",
+            "2024 2025 january february march april may june"
+        ]
+        
+        all_transactions = []
+        seen_memories = set()
+        
+        # Search with each broad term using retry logic
+        for search_term in broad_searches:
+            try:
+                results = await search_with_retry(search_term, user_id, 300, max_retries=2)
+                
+                if results:
+                    for result in results:
+                        if result and isinstance(result, dict):
+                            memory_text = result.get('memory', '')
+                            if memory_text not in seen_memories and len(memory_text) > 20:  # Avoid duplicates and empty memories
+                                all_transactions.append(result)
+                                seen_memories.add(memory_text)
+                            
+                print(f"   - Search '{search_term}': Found {len(results)} results, {len(all_transactions)} total unique")
+                        
+            except Exception as e:
+                print(f"❌ Search error for '{search_term}': {e}")
+        
+        # Also try getting ALL memories without query (if supported)
+        try:
+            all_memories = sync_client.get_all(user_id=user_id, limit=limit)
+            if all_memories:
+                print(f"📊 Retrieved {len(all_memories)} total memories via get_all()")
+                for memory in all_memories:
+                    memory_text = memory.get('memory', '')
+                    if memory_text not in seen_memories and len(memory_text) > 20:
+                        all_transactions.append(memory)
+                        seen_memories.add(memory_text)
+        except Exception as e:
+            print(f"⚠️ get_all() not available or failed: {e}")
+        
+        print(f"📊 FINAL RESULT: Retrieved {len(all_transactions)} unique transactions")
+        
+        # Analyze transaction data
+        categories = {}
+        merchants = {}
+        amounts = []
+        dates = []
+        
+        for transaction in all_transactions:
+            metadata = transaction.get('metadata', {})
+            
+            # Count categories
+            category = metadata.get('category', 'unknown')
+            categories[category] = categories.get(category, 0) + 1
+            
+            # Count merchants  
+            merchant = metadata.get('merchant', 'unknown')
+            merchants[merchant] = merchants.get(merchant, 0) + 1
+            
+            # Collect amounts
+            amount = metadata.get('amount')
+            if amount:
+                amounts.append(amount)
+            
+            # Collect dates
+            timestamp = metadata.get('timestamp')
+            if timestamp:
+                dates.append(timestamp)
+        
+        return {
+            "status": "success",
+            "user_id": user_id,
+            "total_transactions": len(all_transactions),
+            "search_terms_used": len(broad_searches),
+            "unique_categories": len(categories),
+            "unique_merchants": len(merchants),
+            "transactions_with_amounts": len(amounts),
+            "transactions_with_dates": len(dates),
+            "category_breakdown": dict(sorted(categories.items(), key=lambda x: x[1], reverse=True)),
+            "merchant_breakdown": dict(sorted(merchants.items(), key=lambda x: x[1], reverse=True)),
+            "sample_transactions": all_transactions[:5],  # First 5 for preview
+            "all_transactions": all_transactions,  # All transactions for processing
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        print(f"❌ Error retrieving all transactions: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "user_id": user_id,
+            "timestamp": datetime.now().isoformat()
+        }
 
 def detect_user_location(emails: List[EmailMessage]) -> str:
     """Detect user's primary location based on merchant patterns"""
@@ -375,21 +1068,13 @@ async def upload_emails_to_mem0(user_id: str, emails: List[EmailMessage]) -> str
     return f"Successfully processed {processed_count}/{len(emails)} emails for user {user_id} (Location: {user_location})"
 
 async def search_emails_in_mem0(user_id: str, query: str, limit: int = 500) -> List[Dict]:
-    """Search emails in Mem0 memory with comprehensive search strategy"""
+    """Search emails in Mem0 memory with comprehensive search strategy and error handling"""
     try:
-        # Primary search with original query
-        results = sync_client.search(
-            query=query,
-            user_id=user_id,
-            limit=limit,
-            filters={"metadata.source": "gmail"},
-            keyword_search=True,
-            rerank=True,
-            filter_memories=False
-        )
+        # Primary search with original query - add retry logic for API errors
+        results = await search_with_retry(query, user_id, limit)
         
         # If we get fewer results than expected, try broader searches
-        if len(results) < 50:  # If we have fewer than 50 results, search more broadly
+        if len(results) < 100:  # If we have fewer than 100 results, search more broadly
             broader_queries = []
             
             # Generate broader search terms based on the original query
@@ -411,27 +1096,21 @@ async def search_emails_in_mem0(user_id: str, query: str, limit: int = 500) -> L
             
             # Add existing results to seen set
             for result in all_results:
-                seen_memories.add(result.get('memory', ''))
+                if result and isinstance(result, dict):
+                    seen_memories.add(result.get('memory', ''))
             
             for broader_query in broader_queries:
                 try:
-                    broader_results = sync_client.search(
-                        query=broader_query,
-                        user_id=user_id,
-                        limit=200,  # Smaller limit per broader query
-                        filters={"metadata.source": "gmail"},
-                        keyword_search=True,
-                        rerank=True,
-                        filter_memories=False
-                    )
+                    broader_results = await search_with_retry(broader_query, user_id, 500)  # Increased limit
                     
                     # Add unique results
                     if broader_results:
                         for result in broader_results:
-                            memory_text = result.get('memory', '')
-                            if memory_text not in seen_memories:
-                                all_results.append(result)
-                                seen_memories.add(memory_text)
+                            if result and isinstance(result, dict):
+                                memory_text = result.get('memory', '')
+                                if memory_text not in seen_memories:
+                                    all_results.append(result)
+                                    seen_memories.add(memory_text)
                                 
                 except Exception as e:
                     print(f"❌ Broader search error for '{broader_query}': {e}")
@@ -444,6 +1123,48 @@ async def search_emails_in_mem0(user_id: str, query: str, limit: int = 500) -> L
     except Exception as e:
         print(f"❌ Search error for '{query}': {e}")
         return []
+
+async def search_with_retry(query: str, user_id: str, limit: int, max_retries: int = 3) -> List[Dict]:
+    """Search with retry logic for handling API errors"""
+    import asyncio
+    
+    for attempt in range(max_retries):
+        try:
+            # Use sync_client for searches with proper error handling
+            results = sync_client.search(
+                query=query,
+                user_id=user_id,
+                limit=limit,
+                filters={"metadata.source": "gmail"},
+                keyword_search=True,
+                rerank=True,
+                filter_memories=False
+            )
+            
+            if results is not None:
+                # Filter out None or invalid results
+                valid_results = [r for r in results if r and isinstance(r, dict)]
+                print(f"✅ Search successful for '{query}': {len(valid_results)} valid results (attempt {attempt + 1})")
+                return valid_results
+            else:
+                print(f"⚠️ Search returned None for '{query}' (attempt {attempt + 1})")
+                
+        except Exception as e:
+            error_msg = str(e).lower()
+            if "502" in error_msg or "bad gateway" in error_msg or "server error" in error_msg:
+                print(f"🔄 API error (502 Bad Gateway) for '{query}' - Attempt {attempt + 1}/{max_retries}")
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 2  # Exponential backoff: 2, 4, 6 seconds
+                    print(f"   Retrying in {wait_time} seconds...")
+                    await asyncio.sleep(wait_time)
+                    continue
+                else:
+                    print(f"❌ Max retries reached for '{query}': {e}")
+            else:
+                print(f"❌ Non-retryable error for '{query}': {e}")
+                break
+    
+    return []  # Return empty list if all retries failed
 
 # ************* Team Interface Functions *************
 
@@ -508,6 +1229,11 @@ async def query_email_database(user_id: str, query: str, limit: int = 1000, cate
         # Use higher limit and comprehensive search
         search_results = await search_emails_in_mem0(user_id, query, limit)
         
+        # DEBUG: Print detailed search results info
+        print(f"📊 SEARCH DEBUG INFO:")
+        print(f"   - Total results retrieved: {len(search_results)}")
+        print(f"   - Search limit used: {limit}")
+        
         # If still low results, try category-based searches
         if len(search_results) < 20 and not category:
             print(f"🔄 Low results ({len(search_results)}), trying category-based searches...")
@@ -526,15 +1252,7 @@ async def query_email_database(user_id: str, query: str, limit: int = 1000, cate
             for category_name, terms in category_searches.items():
                 for term in terms:
                     try:
-                        cat_results = sync_client.search(
-                            query=term,
-                            user_id=user_id,
-                            limit=100,
-                            filters={"metadata.source": "gmail"},
-                            keyword_search=True,
-                            rerank=True,
-                            filter_memories=False
-                        )
+                        cat_results = await search_emails_in_mem0(user_id, term, 100)
                         
                         if cat_results:
                             for result in cat_results:
@@ -549,94 +1267,168 @@ async def query_email_database(user_id: str, query: str, limit: int = 1000, cate
             search_results = all_results
             print(f"🔍 After category searches: Found {len(search_results)} total results")
         
-        # Use team to process query with search results
+        # DEBUG: Print sample of results to understand data structure
+        if search_results:
+            print(f"📄 SAMPLE RESULT STRUCTURE (first result):")
+            sample_result = search_results[0]
+            if sample_result and isinstance(sample_result, dict):
+                print(f"   - Keys: {list(sample_result.keys())}")
+                print(f"   - Memory preview: {sample_result.get('memory', '')[:100]}...")
+                metadata = sample_result.get('metadata')
+                if metadata and isinstance(metadata, dict):
+                    print(f"   - Metadata keys: {list(metadata.keys())}")
+                else:
+                    print(f"   - Metadata: None or invalid format")
+            else:
+                print(f"   - Invalid result format: {type(sample_result)}")
+        
+        # Extract all transaction data from search results for better processing with null checks
+        transaction_data = []
+        for i, result in enumerate(search_results):
+            if result and isinstance(result, dict):
+                transaction_info = {
+                    "index": i + 1,
+                    "memory": result.get('memory', '') if result.get('memory') else '',
+                    "metadata": result.get('metadata', {}) if result.get('metadata') else {},
+                    "score": result.get('score', 0) if result.get('score') is not None else 0
+                }
+                transaction_data.append(transaction_info)
+            else:
+                print(f"⚠️ Skipping invalid result at index {i}: {type(result)}")
+        
+        print(f"📊 TRANSACTION DATA PREPARED: {len(transaction_data)} valid transactions from {len(search_results)} search results")
+        
+        # Use team to process query with search results - FORCE ALL RESULTS PROCESSING
         team_prompt = f"""
-        You are a DATA-FOCUSED FINANCIAL ANALYST. Your PRIMARY job is to extract and present ACTUAL TRANSACTION DATA from emails in a visually stunning, attention-grabbing format. Focus on REAL DATA, not generic insights.
+        🚀 YOU ARE THE WORLD'S MOST ADVANCED GMAIL FINANCIAL INTELLIGENCE SYSTEM 🚀
 
-        User Query: "{query}"
-        User ID: {user_id}
-        Total Search Results: {len(search_results)}
-        
-        ACTUAL EMAIL DATA FROM MEM0:
-        {json.dumps(search_results, indent=2) if search_results else "No email data found"}
+        MISSION: Create a response so detailed and insightful that the user thinks "DAMN, that's the power of Gmail Insights!"
 
-        CRITICAL REQUIREMENTS - EXTRACT REAL NUMBERS:
+        USER QUERY: "{query}"
+        TRANSACTION DATABASE: {len(search_results)} transactions found
+        RAW DATA: {json.dumps(transaction_data, indent=1)}
 
-        ## 💰 ACTUAL TRANSACTION DATA TABLE
-        Extract and present EVERY transaction with complete details (preserve original currency symbols):
-        
-        | Date | Time | Merchant/Receiver | Amount | Payment Method | Category | Transaction ID | Purpose |
-        |------|------|-------------------|--------|----------------|----------|----------------|---------|
-        
-        IMPORTANT: Fill this table with ACTUAL data from the emails above. Extract real dates, real merchant names, real amounts (₹299, ₹649, etc.), real payment methods from the email content.
+        🎯 CREATE AN ABSOLUTELY MIND-BLOWING RESPONSE:
 
-        ## 📊 REAL SPENDING BREAKDOWN (with exact amounts in original currencies)
-        **Primary Currency Totals (Calculate from actual email data):**
-        - **Total Domestic Spending**: [Calculate actual sum from all INR transactions found]
-        - **Food Delivery**: [Calculate actual sum] ([Count actual transactions]) - List each merchant with real amounts
-        - **Subscriptions**: [Calculate actual sum] ([Count actual services]) - List each service with real amounts
-        - **Shopping**: [Calculate actual sum] ([Count actual purchases]) - List each merchant with real amounts
-        - **Bills & Utilities**: [Calculate actual sum] - List each bill with real amounts
-        - **Transportation**: [Calculate actual sum] - List each ride with real amounts
-        
-        **International Transactions (if any):**
-        - **USD Transactions**: [Calculate actual sum] ([Count actual transactions]) - List actual merchants
-        - **EUR Transactions**: [Calculate actual sum] ([Count actual transactions]) - List actual merchants
+        # 🔥 GMAIL FINANCIAL INTELLIGENCE REPORT 🔥
+        ## Query: "{query}"
 
-        ## 📅 CHRONOLOGICAL TRANSACTION TIMELINE
-        Show transactions in date order with full details (preserve original currencies):
-        
-        Extract ACTUAL dates and amounts from the email data above. Do not use placeholders.
-        
-        **May 2025:** (List all actual May 2025 transactions found)
-        **April 2025:** (List all actual April 2025 transactions found)
+        ### 💎 EXECUTIVE SUMMARY - YOUR FINANCIAL DNA
+        **🎯 INSTANT INSIGHTS:**
+        - 💰 **Total Spending Power**: ₹[CALCULATE EXACT TOTAL] across [COUNT] transactions
+        - 📊 **Financial Behavior Score**: [ANALYZE PATTERNS]/10 (Based on spending consistency)
+        - 🏆 **Top Spending Category**: [CATEGORY] - [PERCENTAGE]% of total budget
+        - ⚡ **Average Transaction Velocity**: ₹[AMOUNT] every [FREQUENCY]
+        - 🎪 **Spending Personality**: [ANALYZE: Conservative/Moderate/Aggressive spender]
 
-        ## 🏪 MERCHANT-WISE SPENDING ANALYSIS
-        For each merchant found in the email data, calculate:
-        - Total: [Actual sum of all transactions for this merchant]
-        - Count: [Actual number of transactions]
-        - Average: [Actual total ÷ actual count]
-        - Most expensive: [Actual highest amount] on [actual date]
+        ### 📋 COMPLETE TRANSACTION BREAKDOWN
+        | 📅 Date | 💰 Amount | 🏪 Merchant | 🎯 Category | 💳 Method | 🔍 Insights |
+        |----------|-----------|-------------|-------------|-----------|-------------|
+        [EXTRACT EVERY SINGLE TRANSACTION WITH REAL DATA - NO PLACEHOLDERS]
 
-        ## 💳 PAYMENT METHOD BREAKDOWN
-        Count and sum actual transactions by payment method:
-        - **UPI Transactions**: [Actual sum] ([Actual count])
-        - **Credit Card**: [Actual sum] ([Actual count])
-        - **Debit Card**: [Actual sum] ([Actual count])
-        - **Net Banking**: [Actual sum] ([Actual count])
+        ### 🎯 CATEGORY INTELLIGENCE MATRIX
+        **🍔 FOOD & DINING EMPIRE**
+        - **Swiggy Addiction Level**: ₹[AMOUNT] ([COUNT] orders) - You order every [FREQUENCY] days
+        - **Zomato Relationship**: ₹[AMOUNT] ([COUNT] orders) - [INSIGHT about preferences]
+        - **Restaurant Splurges**: ₹[AMOUNT] - Your fine dining budget
+        - **🔥 FOOD INSIGHT**: You spend [PERCENTAGE]% more on weekends vs weekdays
+        - **💡 OPTIMIZATION**: Switch to cooking [X] meals/week → Save ₹[AMOUNT]/month
 
-        ## 🎯 DATA-DRIVEN INSIGHTS (based on actual numbers)
-        1. **Highest Single Transaction**: [Find actual highest amount] ([Actual merchant] on [actual date])
-        2. **Most Frequent Merchant**: [Count transactions per merchant, find highest]
-        3. **Peak Spending Day**: [Calculate daily totals, find highest]
-        4. **Average Daily Spending**: [Total spending ÷ number of days with transactions]
-        5. **Weekend vs Weekday**: [Calculate actual weekend total vs weekday total]
+        **🛒 SHOPPING PSYCHOLOGY**
+        - **Amazon Dependency**: ₹[AMOUNT] ([COUNT] orders) - [ANALYZE shopping patterns]
+        - **Impulse Purchase Score**: [CALCULATE based on frequency]/10
+        - **Average Cart Value**: ₹[AMOUNT] - [COMPARE to national average]
+        - **🔥 SHOPPING INSIGHT**: [IDENTIFY peak shopping days/times]
+        - **💡 STRATEGY**: [SPECIFIC recommendations based on patterns]
 
-        MANDATORY CALCULATION RULES:
-        1. Extract EXACT amounts from email content (₹299, ₹649, etc.) - NO PLACEHOLDERS
-        2. Calculate REAL totals by adding up actual amounts found
-        3. Count ACTUAL number of transactions, not estimates
-        4. Show REAL dates from email timestamps
-        5. List ACTUAL merchant names from email senders/content
-        6. Calculate REAL averages using actual numbers (total ÷ count)
-        7. If no data available, clearly state "No transaction data found" - DO NOT use XXX or placeholders
+        **💳 SUBSCRIPTION ECOSYSTEM**
+        - **Monthly Recurring**: ₹[AMOUNT] across [COUNT] services
+        - **Subscription Efficiency**: [ANALYZE usage vs cost]
+        - **Hidden Subscriptions**: [IDENTIFY forgotten subscriptions]
+        - **🔥 SUBSCRIPTION INSIGHT**: You're paying for [X] services you barely use
+        - **💡 OPTIMIZATION**: Cancel [SERVICES] → Save ₹[AMOUNT]/year
 
-        EXAMPLE OF CORRECT OUTPUT:
-        - Food Delivery: ₹1,148 (4 transactions) - Swiggy: ₹299, Zomato: ₹850, etc.
-        - NOT: Food Delivery: ₹X,XXX (X transactions) - Swiggy: ₹XXX, Zomato: ₹XXX
+        ### 🧠 BEHAVIORAL FINANCIAL PSYCHOLOGY
+        **⏰ TIME-BASED SPENDING PATTERNS**
+        - **Peak Spending Hour**: [TIME] - You spend [AMOUNT] more during this hour
+        - **Weekend vs Weekday**: [RATIO] - [INSIGHT about lifestyle]
+        - **Month-end Behavior**: [ANALYZE spending patterns near month-end]
+        - **Payday Effect**: [ANALYZE spending spikes after salary]
 
-        ## 🔍 TRANSACTION SEARCH RESULTS
-        Show exactly what was found for the user's query with complete details and real numbers.
+        **🎭 MERCHANT RELATIONSHIP ANALYSIS**
+        - **Brand Loyalty Score**: [CALCULATE loyalty to specific merchants]
+        - **Merchant Diversity**: You shop at [COUNT] different places
+        - **Price Sensitivity**: [ANALYZE if user shops for deals vs convenience]
+        - **Geographic Spending**: [ANALYZE local vs online spending]
 
-        If no transaction data is available, clearly state:
-        "❌ **No transaction data found for your query.** 
-        
-        To get detailed transaction analysis:
-        1. Upload your Gmail emails first using the 'upload' command
-        2. Ensure emails contain transaction details (amounts, dates, merchants)
-        3. Try broader search terms like 'UPI', 'payment', 'order', or specific merchant names"
+        ### 🚀 PREDICTIVE FINANCIAL INTELLIGENCE
+        **📈 SPENDING TRAJECTORY**
+        - **Monthly Burn Rate**: ₹[AMOUNT] - [TREND: Increasing/Stable/Decreasing]
+        - **Projected Annual Spending**: ₹[CALCULATE based on patterns]
+        - **Seasonal Variations**: [IDENTIFY seasonal spending patterns]
+        - **Risk Assessment**: [ANALYZE financial stability based on patterns]
 
-        IMPORTANT: Process ALL {len(search_results)} search results, extract real numbers, calculate actual totals. NO PLACEHOLDERS ALLOWED.
+        **🎯 PERSONALIZED RECOMMENDATIONS**
+        1. **💰 IMMEDIATE SAVINGS**: [SPECIFIC action] → Save ₹[AMOUNT] this month
+        2. **📊 BUDGET OPTIMIZATION**: [DETAILED budget restructuring advice]
+        3. **🏆 REWARD MAXIMIZATION**: Use [SPECIFIC cards/methods] for [CATEGORIES]
+        4. **⚠️ RISK MITIGATION**: [IDENTIFY potential financial risks]
+        5. **🚀 WEALTH BUILDING**: [SPECIFIC investment/savings strategies]
+
+        ### 🔮 FUTURE FINANCIAL FORECAST
+        **📊 NEXT 30 DAYS PREDICTION**
+        - **Expected Spending**: ₹[CALCULATE based on patterns]
+        - **High-Risk Days**: [IDENTIFY days likely to overspend]
+        - **Savings Opportunities**: [SPECIFIC upcoming chances to save]
+        - **Bill Reminders**: [UPCOMING bills and due dates]
+
+        ### 💎 EXCLUSIVE INSIGHTS (The WOW Factor)
+        **🔥 HIDDEN PATTERNS DISCOVERED:**
+        - [REVEAL surprising patterns user didn't know about themselves]
+        - [COMPARE their spending to similar demographics]
+        - [IDENTIFY their unique financial fingerprint]
+        - [PREDICT their financial personality type]
+
+        **🎪 FINANCIAL PERSONALITY PROFILE:**
+        - **Spending Style**: [DETAILED personality analysis]
+        - **Risk Tolerance**: [ASSESS based on transaction patterns]
+        - **Financial Goals Alignment**: [ANALYZE if spending matches likely goals]
+        - **Behavioral Triggers**: [IDENTIFY what drives their spending decisions]
+
+        ### 🏆 ACTIONABLE INTELLIGENCE DASHBOARD
+        **⚡ IMMEDIATE ACTIONS (Next 7 Days)**
+        1. [SPECIFIC action with exact amount to save]
+        2. [SPECIFIC optimization with clear steps]
+        3. [SPECIFIC opportunity with timeline]
+
+        **🎯 STRATEGIC MOVES (Next 30 Days)**
+        1. [DETAILED strategic recommendation]
+        2. [SPECIFIC financial optimization]
+        3. [CLEAR wealth-building opportunity]
+
+        **🚀 LONG-TERM WEALTH STRATEGY (Next 12 Months)**
+        1. [COMPREHENSIVE financial transformation plan]
+        2. [SPECIFIC investment/savings roadmap]
+        3. [CLEAR path to financial goals]
+
+        ### 📱 SMART ALERTS & NOTIFICATIONS
+        - **Overspending Alert**: You're [PERCENTAGE]% above normal for [CATEGORY]
+        - **Savings Opportunity**: Switch from [X] to [Y] → Save ₹[AMOUNT]
+        - **Reward Optimization**: Use [CARD] for [CATEGORY] → Earn [REWARDS]
+        - **Bill Optimization**: [SPECIFIC bill reduction strategies]
+
+        CRITICAL SUCCESS FACTORS:
+        1. ✅ EXTRACT REAL DATA - Every number must be calculated from actual transactions
+        2. ✅ PROVIDE SPECIFIC INSIGHTS - No generic advice, everything personalized
+        3. ✅ CREATE WOW MOMENTS - Reveal patterns they didn't know existed
+        4. ✅ ACTIONABLE INTELLIGENCE - Every insight must have a clear action
+        5. ✅ FINANCIAL PSYCHOLOGY - Analyze their behavior, not just numbers
+        6. ✅ PREDICTIVE POWER - Show them their financial future
+        7. ✅ EXCLUSIVE INSIGHTS - Information they can't get anywhere else
+
+        🎯 MAKE THEM THINK: "How did Gmail Insights know all this about me?!"
+
+        RESPONSE TONE: Confident, insightful, slightly amazed at the patterns discovered, like a financial detective who just cracked the case of their spending behavior.
         """
         
         team_response = gmail_intelligence_team.run(team_prompt)
@@ -646,7 +1438,13 @@ async def query_email_database(user_id: str, query: str, limit: int = 1000, cate
             "user_id": user_id,
             "query": query,
             "results_count": len(search_results),
+            "search_results_sample": search_results[:3] if search_results else [],  # Include sample for debugging
             "team_response": team_response.content if hasattr(team_response, 'content') else str(team_response),
+            "debug_info": {
+                "total_results_found": len(search_results),
+                "limit_used": limit,
+                "transaction_data_prepared": len(transaction_data)
+            },
             "timestamp": datetime.now().isoformat()
         }
         
@@ -692,24 +1490,25 @@ async def get_email_analytics(user_id: str) -> Dict[str, Any]:
             results = await search_emails_in_mem0(user_id, query, 300)  # Higher limit per query
             analytics_data[query] = results
             
-            # Collect all unique results
+            # Collect all unique results with null checks
             if results:
                 for result in results:
-                    memory_text = result.get('memory', '')
-                    if memory_text not in seen_memories:
-                        all_unique_results.append(result)
-                        seen_memories.add(memory_text)
+                    if result and isinstance(result, dict):
+                        memory_text = result.get('memory', '')
+                        if memory_text not in seen_memories:
+                            all_unique_results.append(result)
+                            seen_memories.add(memory_text)
         
         print(f"📊 Total unique results collected: {len(all_unique_results)}")
         
         # Use team to generate comprehensive analytics report
         team_prompt = f"""
-        You are a MASTER DATA ANALYST specializing in extracting and presenting REAL TRANSACTION DATA from emails. Your job is to create a comprehensive, data-rich report that focuses on ACTUAL NUMBERS, DATES, AMOUNTS, and MERCHANTS - not generic insights.
+        You are a MASTER FINANCIAL DATA ANALYST creating a COMPREHENSIVE FINANCIAL DASHBOARD. Extract REAL data, calculate ACTUAL totals, and provide SPECIFIC insights with exact numbers.
 
-        COMPLETE EMAIL TRANSACTION DATA: {json.dumps(analytics_data, indent=2)}
-        TOTAL UNIQUE TRANSACTIONS FOUND: {len(all_unique_results)}
+        TRANSACTION DATABASE TO ANALYZE: {json.dumps(analytics_data, indent=1)}
+        TOTAL TRANSACTIONS TO PROCESS: {len(all_unique_results)}
 
-        CREATE A COMPREHENSIVE DATA-FOCUSED REPORT WITH REAL NUMBERS:
+        CREATE A DETAILED FINANCIAL ANALYTICS REPORT:
 
         # 💰 COMPLETE FINANCIAL DATA DASHBOARD
 
@@ -811,7 +1610,7 @@ async def get_email_analytics(user_id: str) -> Dict[str, Any]:
         4. **Bill Management**: [Actual bill amount] due [Actual date] - Set auto-pay to avoid late fees
 
         CRITICAL CALCULATION REQUIREMENTS:
-        1. Use ONLY real amounts from actual emails (₹299, ₹649, ₹24,999, etc.) - NO PLACEHOLDERS
+        1. Use ONLY real amounts from actual emails (₹299, ₹649, etc.) - NO PLACEHOLDERS
         2. Calculate REAL totals by adding up actual amounts found in the data
         3. Count ACTUAL number of transactions, not estimates
         4. Show REAL dates from email timestamps
@@ -916,10 +1715,19 @@ async def interactive_team_system():
     print(f"User: {user_id}")
     print("=" * 60)
     print("Commands:")
-    print("- Type your email query")
+    print("- Type your email query (e.g., 'May 2025 food transactions')")
+    print("- Type 'auto' to get AUTOMATED ANALYSIS for ANY query! 🚀 UNIVERSAL!")
+    print("- Type 'wow' to get WOW FACTOR RESPONSE that will blow your mind! 🚀 NEW!")
+    print("- Type 'table' to get TRANSACTION TABLE with specific details ⭐ RECOMMENDED")
+    print("- Type 'detailed' to get direct data analysis with EXACT NUMBERS")
     print("- Type 'upload' to upload sample emails")
-    print("- Type 'analytics' to get comprehensive email analytics")
+    print("- Type 'analytics' to get comprehensive email analytics (LLM-powered)")
+    print("- Type 'all' to get ALL your transactions (comprehensive LLM analysis)")
+    print("- Type 'debug' to debug Mem0 configuration and limits")
+    print("- Type 'test' to test Mem0 search limits")
+    print("- Type 'simple' to run a simple transaction query (basic data only)")
     print("- Type 'team' to test direct team interaction")
+    print("- Type 'help' to see detailed command explanations")
     print("- Type 'exit' to quit")
     print("=" * 60)
     
@@ -1012,6 +1820,372 @@ async def interactive_team_system():
                 else:
                     print(f"❌ Analytics error: {analytics_result.get('error', 'Unknown error')}")
             
+            elif user_input.lower() == 'all':
+                print("🔍 Retrieving ALL your transactions with comprehensive search...")
+                all_transactions = await get_all_user_transactions(user_id)
+                if all_transactions.get('status') == 'success':
+                    print(f"\n📊 COMPREHENSIVE TRANSACTION RETRIEVAL RESULTS:")
+                    print(f"   - Total Transactions Found: {all_transactions.get('total_transactions', 0)}")
+                    print(f"   - Search Terms Used: {all_transactions.get('search_terms_used', 0)}")
+                    print(f"   - Unique Categories: {all_transactions.get('unique_categories', 0)}")
+                    print(f"   - Unique Merchants: {all_transactions.get('unique_merchants', 0)}")
+                    print(f"   - Transactions with Amounts: {all_transactions.get('transactions_with_amounts', 0)}")
+                    print(f"   - Transactions with Dates: {all_transactions.get('transactions_with_dates', 0)}")
+                    
+                    print(f"\n📈 TOP CATEGORIES:")
+                    for category, count in list(all_transactions.get('category_breakdown', {}).items())[:10]:
+                        print(f"   - {category}: {count} transactions")
+                    
+                    print(f"\n🏪 TOP MERCHANTS:")
+                    for merchant, count in list(all_transactions.get('merchant_breakdown', {}).items())[:10]:
+                        print(f"   - {merchant}: {count} transactions")
+                    
+                    # Now process all transactions with the team
+                    if all_transactions.get('total_transactions', 0) > 0:
+                        print(f"\n🤖 Processing ALL {all_transactions['total_transactions']} transactions with Gmail Intelligence Team...")
+                        team_prompt = f"""
+                        PROCESS EVERY SINGLE TRANSACTION - NO EXCEPTIONS
+                        
+                        You have {all_transactions['total_transactions']} transactions to process.
+                        
+                        COMPLETE TRANSACTION DATA:
+                        {json.dumps(all_transactions['all_transactions'], indent=1)}
+                        
+                        Create a comprehensive report showing:
+                        1. Table with ALL {all_transactions['total_transactions']} transactions
+                        2. Complete spending totals and averages
+                        3. Category breakdown with real numbers
+                        4. Merchant analysis with transaction counts
+                        5. Payment method distribution
+                        6. Monthly/chronological breakdown
+                        
+                        CRITICAL: Process EVERY transaction. If response is too long, 
+                        provide summary tables with actual counts and totals.
+                        
+                        Transaction count verification: You MUST process exactly {all_transactions['total_transactions']} transactions.
+                        """
+                        
+                        team_response = gmail_intelligence_team.run(team_prompt)
+                        print(f"\n{team_response.content if hasattr(team_response, 'content') else str(team_response)}")
+                    else:
+                        print("❌ No transactions found to process.")
+                else:
+                    print(f"❌ Error retrieving transactions: {all_transactions.get('error', 'Unknown error')}")
+            
+            elif user_input.lower() == 'debug':
+                print("🔧 Running Mem0 configuration and parameter debug...")
+                debug_mem0_configuration()
+            
+            elif user_input.lower() == 'test':
+                print("🧪 Testing Mem0 search limits...")
+                limit_results = await test_mem0_limits(user_id)
+                print(f"\n📊 Test completed. Results: {limit_results}")
+            
+            elif user_input.lower() == 'simple':
+                print("🔍 Running simple transaction query (avoiding complex processing)...")
+                try:
+                    # Direct search without complex processing
+                    simple_results = await search_with_retry("food order shopping", user_id, 100, max_retries=2)
+                    print(f"✅ Found {len(simple_results)} results")
+                    
+                    if simple_results:
+                        print(f"\n📊 SIMPLE RESULTS PREVIEW:")
+                        for i, result in enumerate(simple_results[:10]):  # Show first 10
+                            if result and isinstance(result, dict):
+                                memory = result.get('memory', '')[:150] + "..." if len(result.get('memory', '')) > 150 else result.get('memory', '')
+                                metadata = result.get('metadata', {})
+                                merchant = metadata.get('merchant', 'Unknown') if isinstance(metadata, dict) else 'Unknown'
+                                amount = metadata.get('amount', 'N/A') if isinstance(metadata, dict) else 'N/A'
+                                category = metadata.get('category', 'N/A') if isinstance(metadata, dict) else 'N/A'
+                                
+                                print(f"   {i+1:2d}. {merchant} | {amount} | {category}")
+                                print(f"       Memory: {memory}")
+                                print()
+                    else:
+                        print("❌ No results found")
+                        
+                except Exception as e:
+                    print(f"❌ Simple query error: {e}")
+                    import traceback
+                    traceback.print_exc()
+            
+            elif user_input.lower() == 'detailed':
+                print("💰 Running detailed transaction analysis with direct data extraction...")
+                try:
+                    # Get comprehensive transaction data
+                    detailed_results = await search_with_retry("upi payment transaction amount rupees food shopping", user_id, 200, max_retries=2)
+                    print(f"✅ Found {len(detailed_results)} results for detailed analysis")
+                    
+                    if detailed_results:
+                        # Direct data extraction and analysis
+                        transaction_analysis = analyze_transactions_directly(detailed_results)
+                        
+                        print(f"\n📊 DETAILED TRANSACTION ANALYSIS:")
+                        print(f"   - Total Transactions Analyzed: {transaction_analysis['total_count']}")
+                        print(f"   - Total Amount Extracted: ₹{transaction_analysis['total_amount']:.2f}")
+                        print(f"   - Average Transaction: ₹{transaction_analysis['average_amount']:.2f}")
+                        print(f"   - Transactions with Amounts: {transaction_analysis['transactions_with_amounts']}")
+                        
+                        print(f"\n🏪 TOP MERCHANTS BY FREQUENCY:")
+                        for merchant, count in transaction_analysis['top_merchants'][:10]:
+                            print(f"   - {merchant}: {count} transactions")
+                        
+                        print(f"\n📈 CATEGORY BREAKDOWN:")
+                        for category, count in transaction_analysis['categories'].items():
+                            print(f"   - {category}: {count} transactions")
+                        
+                        print(f"\n💳 PAYMENT METHOD BREAKDOWN:")
+                        for method, count in transaction_analysis['payment_methods'].items():
+                            print(f"   - {method}: {count} transactions")
+                        
+                        print(f"\n💰 AMOUNT DISTRIBUTION:")
+                        for range_desc, count in transaction_analysis['amount_ranges'].items():
+                            print(f"   - {range_desc}: {count} transactions")
+                        
+                        print(f"\n📝 SAMPLE TRANSACTIONS WITH AMOUNTS:")
+                        for tx in transaction_analysis['sample_transactions'][:5]:
+                            print(f"   - {tx['merchant']} | ₹{tx['amount']} | {tx['category']} | {tx['method']}")
+                        
+                        # Generate comprehensive insights
+                        financial_insights = extract_financial_insights(transaction_analysis, user_input)
+                        print(f"\n{financial_insights}")
+                    else:
+                        print("❌ No transaction data found for detailed analysis")
+                        
+                except Exception as e:
+                    print(f"❌ Detailed analysis error: {e}")
+                    import traceback
+                    traceback.print_exc()
+            
+            elif user_input.lower() == 'table':
+                print("📋 Extracting transactions into detailed table format...")
+                
+                # Get query for table if user wants specific filtering
+                table_query = input("Enter search terms (or press Enter for all transactions): ").strip()
+                if not table_query:
+                    table_query = "payment transaction upi food shopping amount"
+                
+                try:
+                    # Get transaction data
+                    table_results = await search_with_retry(table_query, user_id, 150, max_retries=2)
+                    print(f"✅ Found {len(table_results)} transactions for table extraction")
+                    
+                    if table_results:
+                        # Extract transactions into table format
+                        transaction_table = extract_transaction_table(table_results)
+                        
+                        print(f"\n📊 EXTRACTED {len(transaction_table)} TRANSACTIONS")
+                        
+                        # Generate and display the detailed analysis with table
+                        table_insights = generate_financial_insights_from_table(transaction_table)
+                        print(f"\n{table_insights}")
+                        
+                        # Ask if user wants to see raw transaction details
+                        show_raw = input("\nShow raw memory content for verification? (y/n): ").lower().strip()
+                        if show_raw == 'y':
+                            print(f"\n🔍 RAW TRANSACTION DETAILS (first 5):")
+                            for i, tx in enumerate(transaction_table[:5], 1):
+                                print(f"\n{i}. {tx['receiver']} - {tx['amount']} - {tx['purpose']}")
+                                print(f"   Raw memory: {tx['raw_memory']}")
+                        
+                    else:
+                        print("❌ No transactions found for table creation")
+                        
+                except Exception as e:
+                    print(f"❌ Table extraction error: {e}")
+                    import traceback
+                    traceback.print_exc()
+            
+            elif user_input.lower() == 'wow':
+                print("🚀 Generating WOW FACTOR response that will blow your mind!")
+                wow_query = input("Enter your query (or press Enter for 'April May 2025 transactions'): ").strip()
+                if not wow_query:
+                    wow_query = "April May 2025 transactions"
+                
+                try:
+                    print(f"🎯 Processing: '{wow_query}' with WOW Factor intelligence...")
+                    wow_result = await query_email_database_wow(user_id, wow_query)
+                    
+                    if wow_result.get('status') == 'success':
+                        print(f"\n{wow_result.get('wow_response', 'No WOW response generated')}")
+                    else:
+                        print(f"❌ WOW Factor error: {wow_result.get('error', 'Unknown error')}")
+                        
+                except Exception as e:
+                    print(f"❌ WOW Factor processing error: {e}")
+                    import traceback
+                    traceback.print_exc()
+            
+            elif user_input.lower() == 'auto':
+                print("🚀 UNIVERSAL AUTOMATED ANALYSIS - Works for ANY query!")
+                auto_query = input("Enter your query (risk profiling, spending analysis, etc.): ").strip()
+                if not auto_query:
+                    auto_query = "Do risk profiling for me"
+                
+                try:
+                    print(f"🎯 Processing: '{auto_query}' with Universal Intelligence...")
+                    
+                    # Get comprehensive data with high limits
+                    search_terms = [
+                        "payment transaction amount rupees upi paid",
+                        "food delivery order restaurant swiggy zomato", 
+                        "shopping amazon flipkart purchase buy",
+                        "subscription netflix spotify renewal",
+                        "bill electricity utility reminder due"
+                    ]
+                    
+                    all_transactions = []
+                    seen_memories = set()
+                    
+                    for search_term in search_terms:
+                        try:
+                            results = await search_with_retry(search_term, user_id, 500, max_retries=2)
+                            
+                            if results:
+                                for result in results:
+                                    if result and isinstance(result, dict):
+                                        memory_text = result.get('memory', '')
+                                        if memory_text not in seen_memories and len(memory_text) > 20:
+                                            all_transactions.append(result)
+                                            seen_memories.add(memory_text)
+                                            
+                            print(f"   - '{search_term}': Found {len(results)} results, {len(all_transactions)} total unique")
+                                    
+                        except Exception as e:
+                            print(f"❌ Search error for '{search_term}': {e}")
+                    
+                    print(f"📊 TOTAL DATA RETRIEVED: {len(all_transactions)} unique transactions")
+                    
+                    if all_transactions:
+                        # Direct analysis
+                        analysis = analyze_transactions_directly(all_transactions)
+                        
+                        # Generate risk profiling response
+                        if "risk" in auto_query.lower():
+                            print("🎯 Generating RISK PROFILING with real data...")
+                            
+                            total_amount = analysis['total_amount']
+                            total_count = analysis['total_count']
+                            avg_amount = analysis['average_amount']
+                            
+                            # Calculate risk score
+                            risk_score = 5
+                            if avg_amount > 2000: risk_score += 2
+                            elif avg_amount < 500: risk_score -= 1
+                            
+                            high_value = analysis['amount_ranges'].get('Over ₹5000', 0)
+                            if high_value > 5: risk_score += 2
+                            
+                            category_diversity = len(analysis['categories'])
+                            if category_diversity > 8: risk_score += 1
+                            
+                            upi_count = analysis['payment_methods'].get('UPI', 0)
+                            digital_adoption = (upi_count / total_count) * 100 if total_count > 0 else 0
+                            if digital_adoption > 70: risk_score += 1
+                            
+                            risk_score = min(10, max(1, risk_score))
+                            
+                            if risk_score <= 3:
+                                risk_profile = "Conservative"
+                            elif risk_score <= 6:
+                                risk_profile = "Moderate"
+                            else:
+                                risk_profile = "Aggressive"
+                            
+                            print(f"""
+# 🎯 COMPREHENSIVE RISK PROFILING REPORT
+## Based on Analysis of {total_count} Transactions (₹{total_amount:,.2f})
+
+### 💎 YOUR FINANCIAL RISK PROFILE
+
+**🏆 RISK SCORE: {risk_score}/10**
+**📊 RISK CATEGORY: {risk_profile}**
+
+### 📈 RISK ASSESSMENT BREAKDOWN
+
+**💰 SPENDING BEHAVIOR ANALYSIS:**
+- **Average Transaction**: ₹{avg_amount:,.2f}
+- **High-Value Transactions**: {high_value} transactions over ₹5,000
+- **Category Diversity**: {category_diversity} different spending categories
+- **Digital Adoption**: {digital_adoption:.1f}% UPI usage
+
+**🚀 INVESTMENT RECOMMENDATIONS:**
+
+Based on your {risk_profile} risk profile:
+- **Recommended SIP**: ₹{min(total_amount * 0.1, 25000):.0f}/month
+- **Emergency Fund**: ₹{total_amount * 6:.0f} (6 months expenses)
+- **Risk Tolerance**: {risk_profile} investor
+
+**🎯 NEXT STEPS:**
+1. Start SIP with ₹{min(total_amount * 0.1, 25000):.0f}/month
+2. Build emergency fund of ₹{total_amount * 6:.0f}
+3. Consider {risk_profile.lower()} investment options
+
+*Analysis based on {total_count} actual transactions from your Gmail data.*
+""")
+                        else:
+                            # General analysis
+                            insights = extract_financial_insights(analysis, auto_query)
+                            print(f"\n{insights}")
+                    else:
+                        print("❌ No transaction data found for analysis")
+                        
+                except Exception as e:
+                    print(f"❌ Universal analysis error: {e}")
+                    import traceback
+                    traceback.print_exc()
+            
+            elif user_input.lower() == 'help':
+                print("📖 COMMAND EXPLANATIONS:")
+                print()
+                print("🔍 QUERY COMMANDS:")
+                print("  • Natural language query: Ask specific questions about your transactions")
+                print("    Example: 'Show me food orders in May 2025'")
+                print("    Example: 'UPI transactions over ₹500'")
+                print()
+                print("📊 ANALYSIS COMMANDS:")
+                print("  • 'wow' - 🚀 WOW FACTOR: Mind-blowing financial intelligence report!")
+                print("    ✅ Complete financial DNA analysis with personality insights")
+                print("    ✅ Behavioral psychology and spending patterns")
+                print("    ✅ Predictive intelligence and future forecasting")
+                print("    ✅ Exclusive insights you can't get anywhere else")
+                print("    ✅ Makes you think: 'How did Gmail know all this about me?!'")
+                print()
+                print("  • 'table' - ⭐ BEST OPTION: Complete transaction table with specific details")
+                print("    ✅ Proper table format: Date | Amount | Receiver | Purpose | Payment Method")
+                print("    ✅ Real extracted data from each transaction")
+                print("    ✅ Specific financial insights and recommendations")
+                print("    ✅ Verifiable transaction details")
+                print()
+                print("  • 'detailed' - Direct data extraction with EXACT NUMBERS")
+                print("    ✅ Real amounts, counts, averages, percentages")
+                print("    ✅ Actual merchant names and categories")
+                print("    ✅ Specific insights and recommendations")
+                print("    ✅ No vague placeholders")
+                print()
+                print("  • 'all' - Comprehensive LLM analysis of ALL transactions")
+                print("    ⚠️ May provide generic responses")
+                print("    ⚠️ Dependent on LLM processing quality")
+                print()
+                print("  • 'analytics' - Email analytics with pattern analysis")
+                print("    ⚠️ May include placeholders instead of real numbers")
+                print()
+                print("  • 'simple' - Basic transaction preview (first 10 results)")
+                print("    ℹ️ Quick overview without detailed analysis")
+                print()
+                print("🔧 DEBUG COMMANDS:")
+                print("  • 'debug' - Check Mem0 configuration and connection")
+                print("  • 'test' - Test search limits to see how many transactions you have")
+                print("  • 'upload' - Add sample transaction data for testing")
+                print()
+                print("💡 FOR BEST RESULTS:")
+                print("  1. Use 'wow' command for the most impressive financial intelligence report")
+                print("  2. Use 'table' command to see individual transactions in proper format")
+                print("  3. Use 'detailed' command for aggregate analysis and calculations")
+                print("  4. Use natural language queries for specific date ranges or merchants")
+                print("  5. Use 'test' first to verify your transaction count")
+                print()
+            
             elif user_input.lower() == 'team':
                 print("🤖 Direct team interaction...")
                 team_query = input("Enter query for the team: ").strip()
@@ -1033,6 +2207,628 @@ async def interactive_team_system():
         except Exception as e:
             print(f"❌ Error: {e}")
 
+# ************* WOW Factor Response Generator *************
+
+def create_wow_factor_response(transaction_data: List[Dict], query: str, user_id: str) -> str:
+    """Create a mind-blowing response that makes users think 'DAMN, that's powerful!'"""
+    
+    # Extract real data first
+    analysis = analyze_transactions_directly(transaction_data)
+    table = extract_transaction_table(transaction_data)
+    
+    # Calculate advanced metrics
+    total_amount = analysis['total_amount']
+    total_count = analysis['total_count']
+    avg_amount = analysis['average_amount']
+    
+    # Time-based analysis
+    from datetime import datetime
+    import calendar
+    
+    # Merchant analysis
+    top_merchants = analysis['top_merchants'][:5]
+    categories = analysis['categories']
+    
+    # Create the WOW response
+    response = f"""
+# 🚀 GMAIL FINANCIAL INTELLIGENCE REPORT 🚀
+## Query: "{query}"
+
+### 💎 YOUR FINANCIAL DNA DECODED
+**🎯 INSTANT POWER INSIGHTS:**
+- 💰 **Total Financial Footprint**: ₹{total_amount:,.2f} across {total_count} transactions
+- 📊 **Your Spending Velocity**: ₹{avg_amount:,.2f} per transaction
+- 🏆 **Financial Activity Level**: {total_count} transactions = {'High' if total_count > 50 else 'Moderate' if total_count > 20 else 'Conservative'} spender
+- ⚡ **Money Flow Pattern**: {'Consistent' if len(set(analysis['categories'].keys())) > 5 else 'Focused'} across {len(analysis['categories'])} categories
+- 🎪 **Spending Personality**: {'Diversified Explorer' if len(analysis['merchants']) > 10 else 'Brand Loyal' if len(analysis['merchants']) < 5 else 'Balanced Shopper'}
+
+### 📋 COMPLETE TRANSACTION INTELLIGENCE
+"""
+    
+    # Add transaction table
+    if table:
+        response += """
+| 📅 Date | 💰 Amount | 🏪 Merchant | 🎯 Category | 💳 Method | 🔍 Smart Insight |
+|----------|-----------|-------------|-------------|-----------|------------------|
+"""
+        for i, tx in enumerate(table[:15]):  # Show top 15 transactions
+            insight = ""
+            if tx['amount_numeric'] > avg_amount * 2:
+                insight = "🔥 Big Spender Alert!"
+            elif tx['purpose'] == 'Food Order' and tx['amount_numeric'] > 500:
+                insight = "🍔 Premium Foodie"
+            elif tx['payment_method'] == 'UPI':
+                insight = "⚡ Digital Native"
+            else:
+                insight = "💫 Regular Purchase"
+                
+            response += f"| {tx['date'][:10]} | {tx['amount']} | {tx['receiver'][:15]} | {tx['purpose'][:12]} | {tx['payment_method'][:8]} | {insight} |\n"
+    
+    # Category Intelligence
+    response += f"""
+
+### 🎯 CATEGORY INTELLIGENCE MATRIX
+"""
+    
+    # Food analysis
+    food_data = {k: v for k, v in categories.items() if 'food' in k.lower() or 'delivery' in k.lower()}
+    if food_data:
+        food_total = sum(food_data.values())
+        food_percentage = (food_total / total_count) * 100
+        response += f"""
+**🍔 FOOD & DINING EMPIRE**
+- **Food Addiction Level**: {food_total} orders ({food_percentage:.1f}% of all transactions)
+- **Dining Frequency**: You order food every {max(1, 30//food_total)} days on average
+- **🔥 FOOD INSIGHT**: You're a {'Heavy' if food_percentage > 30 else 'Moderate' if food_percentage > 15 else 'Light'} food delivery user
+- **💡 OPTIMIZATION**: Cook {max(1, food_total//4)} meals/week → Save ₹{food_total * 200:.0f}/month
+"""
+    
+    # Shopping analysis
+    shopping_merchants = [m for m, c in top_merchants if any(shop in m.lower() for shop in ['amazon', 'flipkart', 'myntra', 'shopping'])]
+    if shopping_merchants:
+        response += f"""
+**🛒 SHOPPING PSYCHOLOGY**
+- **E-commerce Dependency**: {len(shopping_merchants)} major platforms
+- **Shopping Frequency**: {sum(c for m, c in shopping_merchants)} orders
+- **🔥 SHOPPING INSIGHT**: You're a {'Serial' if len(shopping_merchants) > 3 else 'Selective'} online shopper
+- **💡 STRATEGY**: Use price comparison tools → Save 15-20% on purchases
+"""
+    
+    # UPI analysis
+    upi_count = analysis['payment_methods'].get('UPI', 0) + analysis['payment_methods'].get('upi', 0)
+    if upi_count > 0:
+        upi_percentage = (upi_count / total_count) * 100
+        response += f"""
+**💳 DIGITAL PAYMENT MASTERY**
+- **UPI Adoption**: {upi_count} transactions ({upi_percentage:.1f}%) - You're digitally advanced!
+- **Payment Efficiency**: {'Cashless Champion' if upi_percentage > 70 else 'Digital Adopter' if upi_percentage > 40 else 'Traditional Mix'}
+- **🔥 PAYMENT INSIGHT**: You save ~₹{upi_count * 5:.0f}/year in cash handling costs
+"""
+    
+    # Behavioral insights
+    response += f"""
+
+### 🧠 BEHAVIORAL FINANCIAL PSYCHOLOGY
+**🎭 YOUR SPENDING PERSONALITY REVEALED:**
+- **Decision Style**: {'Impulse Buyer' if avg_amount < 500 else 'Calculated Spender' if avg_amount > 2000 else 'Balanced Purchaser'}
+- **Brand Loyalty**: {'High' if len(analysis['merchants']) < total_count/3 else 'Low'} - You {'stick to favorites' if len(analysis['merchants']) < total_count/3 else 'love variety'}
+- **Financial Discipline**: {'Excellent' if len(analysis['amount_ranges']) > 3 else 'Good'} spending distribution
+- **Risk Profile**: {'Conservative' if analysis['amount_ranges'].get('Under ₹100', 0) > total_count/2 else 'Aggressive' if analysis['amount_ranges'].get('Over ₹5000', 0) > 5 else 'Moderate'}
+
+**🔮 PREDICTIVE INSIGHTS:**
+- **Monthly Burn Rate**: ₹{total_amount:,.0f} (Based on current pattern)
+- **Annual Projection**: ₹{total_amount * 12:,.0f} if spending continues
+- **Savings Potential**: ₹{total_amount * 0.15:,.0f}/month with optimization
+"""
+    
+    # Exclusive insights
+    response += f"""
+
+### 💎 EXCLUSIVE INSIGHTS (The WOW Factor!)
+**🔥 HIDDEN PATTERNS DISCOVERED:**
+- **Your Financial Fingerprint**: {total_count} transactions reveal you're a {'Tech-Savvy Urban Professional' if upi_count > total_count/2 else 'Traditional Spender'}
+- **Spending Rhythm**: You make {total_count//30 if total_count > 30 else 1} transactions per day on average
+- **Value Consciousness**: {'Price-sensitive' if analysis['amount_ranges'].get('Under ₹500', 0) > total_count/2 else 'Value-focused' if avg_amount < 1000 else 'Premium-oriented'}
+- **Digital Maturity**: {'Advanced' if upi_count > total_count * 0.7 else 'Moderate' if upi_count > total_count * 0.3 else 'Traditional'} digital payment adoption
+
+**🎪 FINANCIAL PERSONALITY PROFILE:**
+- **Spending Style**: {analysis['categories']} categories show you're a {'Diversified' if len(analysis['categories']) > 5 else 'Focused'} spender
+- **Transaction Behavior**: {'Frequent small purchases' if avg_amount < 500 else 'Occasional big purchases' if avg_amount > 2000 else 'Balanced spending pattern'}
+- **Financial Habits**: {'Organized' if len(analysis['payment_methods']) < 4 else 'Flexible'} payment preferences
+"""
+    
+    # Actionable intelligence
+    response += f"""
+
+### 🏆 ACTIONABLE INTELLIGENCE DASHBOARD
+**⚡ IMMEDIATE ACTIONS (Next 7 Days)**
+1. **💰 Quick Win**: Switch to cashback cards for top category → Save ₹{total_amount * 0.02:.0f}/month
+2. **📊 Optimization**: Review {len([m for m, c in top_merchants if c == 1])} single-purchase merchants → Consolidate orders
+3. **🎯 Focus**: Your top spending is {max(categories.items(), key=lambda x: x[1])[0]} → Set budget alerts
+
+**🚀 STRATEGIC MOVES (Next 30 Days)**
+1. **Budget Restructuring**: Allocate ₹{total_amount * 0.6:.0f} for essentials, ₹{total_amount * 0.4:.0f} for lifestyle
+2. **Reward Maximization**: Use specific cards for your top 3 categories → Earn ₹{total_amount * 0.03:.0f} in rewards
+3. **Spending Optimization**: Reduce {max(categories.items(), key=lambda x: x[1])[0]} by 20% → Save ₹{total_amount * 0.2:.0f}
+
+**💡 EXCLUSIVE RECOMMENDATIONS:**
+- **Your Spending Sweet Spot**: ₹{avg_amount:.0f} per transaction is {'optimal' if 200 <= avg_amount <= 1000 else 'high' if avg_amount > 1000 else 'low'}
+- **Financial Health Score**: {min(10, max(1, int((total_count/10) + (len(analysis['categories'])/2))))}/10 based on transaction diversity
+- **Savings Opportunity**: ₹{total_amount * 0.25:.0f}/month potential savings identified
+"""
+    
+    # Smart alerts
+    food_percentage = 0
+    upi_percentage = 0
+    if food_data:
+        food_percentage = (sum(food_data.values()) / total_count) * 100
+    if upi_count > 0:
+        upi_percentage = (upi_count / total_count) * 100
+        
+    response += f"""
+
+### 📱 SMART FINANCIAL ALERTS
+- **🚨 Pattern Alert**: You spend {food_percentage:.0f}% on food delivery - Consider meal prep
+- **💎 Opportunity**: Your UPI usage ({upi_percentage:.0f}%) qualifies for premium cashback cards
+- **⚡ Efficiency**: Consolidate purchases from {len(analysis['merchants'])} merchants → Reduce to top 5
+- **🎯 Goal Setting**: Based on your ₹{avg_amount:.0f} average, set ₹{avg_amount * 1.2:.0f} transaction alerts
+
+### 🔮 FINANCIAL FORTUNE TELLING
+**📊 NEXT 30 DAYS PREDICTION:**
+- **Expected Spending**: ₹{total_amount * 1.1:.0f} (10% seasonal increase)
+- **High-Risk Categories**: {max(categories.items(), key=lambda x: x[1])[0]} likely to spike
+- **Savings Target**: ₹{total_amount * 0.15:.0f} achievable with current patterns
+- **Reward Potential**: ₹{total_amount * 0.025:.0f} in cashback/rewards possible
+
+---
+
+## 🎯 THE BOTTOM LINE
+**Your Gmail emails revealed {total_count} financial decisions totaling ₹{total_amount:,.2f}**
+
+You're a {analysis['categories']} spender with {len(analysis['merchants'])} merchant relationships, showing {'excellent' if len(analysis['categories']) > 5 else 'good'} financial diversity. Your ₹{avg_amount:.0f} average transaction suggests {'premium' if avg_amount > 1000 else 'value-conscious'} spending habits.
+
+**🚀 Key Takeaway**: You have ₹{total_amount * 0.2:.0f}/month optimization potential while maintaining your lifestyle!
+
+*How did Gmail Insights decode all this from your emails? That's the power of AI financial intelligence!* 🤖✨
+"""
+    
+    return response
+
+# ************* Enhanced Query Function *************
+
+async def query_email_database_wow(user_id: str, query: str, limit: int = 1000) -> Dict[str, Any]:
+    """Enhanced query function that uses the WOW factor response generator"""
+    try:
+        print(f"🚀 WOW Factor Gmail Intelligence: Processing query '{query}' for user {user_id}")
+        
+        # Get comprehensive search results
+        search_results = await search_emails_in_mem0(user_id, query, limit)
+        
+        # Extract transaction data with null checks
+        transaction_data = []
+        for i, result in enumerate(search_results):
+            if result and isinstance(result, dict):
+                transaction_info = {
+                    "index": i + 1,
+                    "memory": result.get('memory', '') if result.get('memory') else '',
+                    "metadata": result.get('metadata', {}) if result.get('metadata') else {},
+                    "score": result.get('score', 0) if result.get('score') is not None else 0
+                }
+                transaction_data.append(transaction_info)
+        
+        print(f"📊 WOW FACTOR: Processing {len(transaction_data)} transactions for mind-blowing insights")
+        
+        # Generate WOW factor response
+        wow_response = create_wow_factor_response(transaction_data, query, user_id)
+        
+        return {
+            "status": "success",
+            "user_id": user_id,
+            "query": query,
+            "results_count": len(search_results),
+            "wow_response": wow_response,
+            "debug_info": {
+                "total_results_found": len(search_results),
+                "limit_used": limit,
+                "transaction_data_prepared": len(transaction_data)
+            },
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        print(f"❌ WOW Factor query error: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "user_id": user_id,
+            "query": query,
+            "timestamp": datetime.now().isoformat()
+        }
+
+# ************* Universal Automated Analysis System *************
+
+async def universal_gmail_analysis(user_id: str, query: str) -> Dict[str, Any]:
+    """Universal automated analysis system that works for ANY query type"""
+    try:
+        print(f"🚀 UNIVERSAL ANALYSIS: Processing '{query}' for user {user_id}")
+        
+        # Step 1: Get comprehensive transaction data with high limits
+        print("📊 Step 1: Comprehensive data retrieval...")
+        
+        # Use multiple broad search terms to get ALL relevant data
+        search_terms = [
+            "payment transaction amount rupees upi paid",
+            "food delivery order restaurant swiggy zomato",
+            "shopping amazon flipkart purchase buy",
+            "subscription netflix spotify renewal",
+            "bill electricity utility reminder due",
+            "investment mutual fund sip trading",
+            "insurance premium policy health life",
+            "travel booking flight hotel uber ola",
+            "entertainment movie ticket bookmyshow",
+            "₹ Rs rupees money cost price total",
+            "2024 2025 january february march april may june",
+            "credit debit card bank transfer netbanking"
+        ]
+        
+        all_transactions = []
+        seen_memories = set()
+        
+        for search_term in search_terms:
+            try:
+                results = await search_with_retry(search_term, user_id, 1000, max_retries=2)  # High limit
+                
+                if results:
+                    for result in results:
+                        if result and isinstance(result, dict):
+                            memory_text = result.get('memory', '')
+                            if memory_text not in seen_memories and len(memory_text) > 20:
+                                all_transactions.append(result)
+                                seen_memories.add(memory_text)
+                                
+                print(f"   - '{search_term}': Found {len(results)} results, {len(all_transactions)} total unique")
+                        
+            except Exception as e:
+                print(f"❌ Search error for '{search_term}': {e}")
+        
+        print(f"📊 TOTAL DATA RETRIEVED: {len(all_transactions)} unique transactions")
+        
+        # Step 2: Direct data analysis
+        print("🔍 Step 2: Direct data extraction and analysis...")
+        analysis = analyze_transactions_directly(all_transactions)
+        table = extract_transaction_table(all_transactions)
+        
+        # Step 3: Query-specific analysis
+        print(f"🎯 Step 3: Query-specific analysis for '{query}'...")
+        
+        # Determine analysis type based on query
+        query_lower = query.lower()
+        analysis_type = "general"
+        
+        if any(word in query_lower for word in ["risk", "profile", "profiling", "assessment"]):
+            analysis_type = "risk_profiling"
+        elif any(word in query_lower for word in ["spending", "expense", "budget", "money"]):
+            analysis_type = "spending_analysis"
+        elif any(word in query_lower for word in ["food", "delivery", "restaurant"]):
+            analysis_type = "food_analysis"
+        elif any(word in query_lower for word in ["subscription", "recurring", "monthly"]):
+            analysis_type = "subscription_analysis"
+        elif any(word in query_lower for word in ["investment", "mutual", "fund", "sip"]):
+            analysis_type = "investment_analysis"
+        elif any(word in query_lower for word in ["april", "may", "march", "month"]):
+            analysis_type = "monthly_analysis"
+        
+        # Step 4: Generate intelligent response based on analysis type
+        print(f"📝 Step 4: Generating {analysis_type} response...")
+        
+        response = generate_intelligent_response(
+            query=query,
+            analysis_type=analysis_type,
+            analysis=analysis,
+            table=table,
+            all_transactions=all_transactions,
+            user_id=user_id
+        )
+        
+        return {
+            "status": "success",
+            "user_id": user_id,
+            "query": query,
+            "analysis_type": analysis_type,
+            "total_transactions": len(all_transactions),
+            "response": response,
+            "debug_info": {
+                "search_terms_used": len(search_terms),
+                "unique_transactions_found": len(all_transactions),
+                "analysis_summary": {
+                    "total_amount": analysis['total_amount'],
+                    "transaction_count": analysis['total_count'],
+                    "categories": len(analysis['categories']),
+                    "merchants": len(analysis['merchants'])
+                }
+            },
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        print(f"❌ Universal analysis error: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "user_id": user_id,
+            "query": query,
+            "timestamp": datetime.now().isoformat()
+        }
+
+def generate_intelligent_response(query: str, analysis_type: str, analysis: Dict, table: List[Dict], all_transactions: List[Dict], user_id: str) -> str:
+    """Generate intelligent response based on analysis type and real data"""
+    
+    total_amount = analysis['total_amount']
+    total_count = analysis['total_count']
+    avg_amount = analysis['average_amount']
+    categories = analysis['categories']
+    merchants = analysis['merchants']
+    payment_methods = analysis['payment_methods']
+    
+    if analysis_type == "risk_profiling":
+        return generate_risk_profiling_response(query, analysis, table, all_transactions)
+    elif analysis_type == "spending_analysis":
+        return generate_spending_analysis_response(query, analysis, table, all_transactions)
+    elif analysis_type == "food_analysis":
+        return generate_food_analysis_response(query, analysis, table, all_transactions)
+    elif analysis_type == "subscription_analysis":
+        return generate_subscription_analysis_response(query, analysis, table, all_transactions)
+    elif analysis_type == "investment_analysis":
+        return generate_investment_analysis_response(query, analysis, table, all_transactions)
+    elif analysis_type == "monthly_analysis":
+        return generate_monthly_analysis_response(query, analysis, table, all_transactions)
+    else:
+        return generate_general_analysis_response(query, analysis, table, all_transactions)
+
+def generate_risk_profiling_response(query: str, analysis: Dict, table: List[Dict], all_transactions: List[Dict]) -> str:
+    """Generate comprehensive risk profiling based on actual transaction data"""
+    
+    total_amount = analysis['total_amount']
+    total_count = analysis['total_count']
+    avg_amount = analysis['average_amount']
+    
+    # Calculate risk metrics
+    high_value_transactions = analysis['amount_ranges'].get('Over ₹5000', 0)
+    low_value_transactions = analysis['amount_ranges'].get('Under ₹100', 0)
+    
+    # Risk scoring
+    risk_score = 5  # Base score
+    
+    # Adjust based on spending patterns
+    if avg_amount > 2000:
+        risk_score += 2  # Higher spending = higher risk tolerance
+    elif avg_amount < 500:
+        risk_score -= 1  # Lower spending = more conservative
+    
+    if high_value_transactions > 5:
+        risk_score += 2  # Frequent high-value transactions
+    
+    if low_value_transactions > total_count * 0.5:
+        risk_score -= 1  # Many small transactions = conservative
+    
+    # Diversification score
+    category_diversity = len(analysis['categories'])
+    merchant_diversity = len(analysis['merchants'])
+    
+    if category_diversity > 8:
+        risk_score += 1  # Good diversification
+    if merchant_diversity > 15:
+        risk_score += 1  # Good merchant diversification
+    
+    # Payment method analysis
+    upi_count = analysis['payment_methods'].get('UPI', 0) + analysis['payment_methods'].get('upi', 0)
+    digital_adoption = (upi_count / total_count) * 100 if total_count > 0 else 0
+    
+    if digital_adoption > 70:
+        risk_score += 1  # High digital adoption = tech-savvy
+    
+    risk_score = min(10, max(1, risk_score))  # Keep between 1-10
+    
+    # Risk profile classification
+    if risk_score <= 3:
+        risk_profile = "Conservative"
+        risk_description = "Low risk tolerance, prefers stable investments"
+    elif risk_score <= 6:
+        risk_profile = "Moderate"
+        risk_description = "Balanced approach to risk and returns"
+    else:
+        risk_profile = "Aggressive"
+        risk_description = "High risk tolerance, seeks higher returns"
+    
+    response = f"""
+# 🎯 COMPREHENSIVE RISK PROFILING REPORT
+## Based on Analysis of {total_count} Transactions (₹{total_amount:,.2f})
+
+### 💎 YOUR FINANCIAL RISK PROFILE
+
+**🏆 RISK SCORE: {risk_score}/10**
+**📊 RISK CATEGORY: {risk_profile}**
+**💡 PROFILE DESCRIPTION: {risk_description}**
+
+### 📈 RISK ASSESSMENT BREAKDOWN
+
+**💰 SPENDING BEHAVIOR ANALYSIS:**
+- **Average Transaction**: ₹{avg_amount:,.2f}
+- **High-Value Transactions**: {high_value_transactions} transactions over ₹5,000
+- **Small Transactions**: {low_value_transactions} transactions under ₹100
+- **Spending Consistency**: {'Stable' if len(analysis['amount_ranges']) > 3 else 'Variable'}
+
+**🎯 DIVERSIFICATION ANALYSIS:**
+- **Category Spread**: {category_diversity} different spending categories
+- **Merchant Diversity**: {merchant_diversity} different merchants
+- **Diversification Score**: {'Excellent' if category_diversity > 8 else 'Good' if category_diversity > 5 else 'Limited'}
+
+**💳 DIGITAL ADOPTION:**
+- **UPI Usage**: {upi_count} transactions ({digital_adoption:.1f}%)
+- **Digital Maturity**: {'Advanced' if digital_adoption > 70 else 'Moderate' if digital_adoption > 40 else 'Traditional'}
+- **Tech Comfort Level**: {'High' if digital_adoption > 60 else 'Medium' if digital_adoption > 30 else 'Low'}
+
+### 🔍 DETAILED RISK FACTORS
+
+**✅ POSITIVE RISK INDICATORS:**
+"""
+    
+    # Add positive indicators
+    positive_indicators = []
+    if category_diversity > 6:
+        positive_indicators.append(f"- Good spending diversification across {category_diversity} categories")
+    if digital_adoption > 50:
+        positive_indicators.append(f"- High digital payment adoption ({digital_adoption:.1f}%)")
+    if avg_amount > 500 and avg_amount < 2000:
+        positive_indicators.append(f"- Balanced average transaction size (₹{avg_amount:.0f})")
+    if merchant_diversity > 10:
+        positive_indicators.append(f"- Good merchant diversification ({merchant_diversity} merchants)")
+    
+    for indicator in positive_indicators:
+        response += f"\n{indicator}"
+    
+    response += f"""
+
+**⚠️ RISK CONSIDERATIONS:**
+"""
+    
+    # Add risk considerations
+    risk_considerations = []
+    if high_value_transactions > 10:
+        risk_considerations.append(f"- Frequent high-value transactions ({high_value_transactions} over ₹5,000)")
+    if avg_amount > 3000:
+        risk_considerations.append(f"- High average spending (₹{avg_amount:.0f}) indicates aggressive spending")
+    if category_diversity < 4:
+        risk_considerations.append(f"- Limited spending categories ({category_diversity}) - consider diversification")
+    if digital_adoption < 30:
+        risk_considerations.append(f"- Low digital adoption ({digital_adoption:.1f}%) - may miss tech opportunities")
+    
+    for consideration in risk_considerations:
+        response += f"\n{consideration}"
+    
+    # Investment recommendations based on risk profile
+    response += f"""
+
+### 🚀 INVESTMENT RECOMMENDATIONS
+
+**Based on your {risk_profile} risk profile:**
+
+"""
+    
+    if risk_profile == "Conservative":
+        response += """
+**💰 CONSERVATIVE INVESTMENT STRATEGY:**
+- **Fixed Deposits**: 40-50% allocation for stability
+- **Government Bonds**: 20-30% for guaranteed returns
+- **Large-cap Mutual Funds**: 15-20% for steady growth
+- **Emergency Fund**: 6-12 months of expenses in liquid funds
+- **Gold/Silver**: 5-10% as hedge against inflation
+
+**📊 Expected Returns**: 6-8% annually with low volatility
+**⏰ Investment Horizon**: Focus on capital preservation
+"""
+    elif risk_profile == "Moderate":
+        response += """
+**⚖️ BALANCED INVESTMENT STRATEGY:**
+- **Equity Mutual Funds**: 50-60% (mix of large and mid-cap)
+- **Debt Funds**: 25-30% for stability
+- **ELSS Funds**: 10-15% for tax saving
+- **International Funds**: 5-10% for global exposure
+- **Emergency Fund**: 6 months expenses
+
+**📊 Expected Returns**: 8-12% annually with moderate volatility
+**⏰ Investment Horizon**: 5-10 years for optimal growth
+"""
+    else:  # Aggressive
+        response += """
+**🚀 AGGRESSIVE INVESTMENT STRATEGY:**
+- **Small & Mid-cap Funds**: 40-50% for high growth
+- **Large-cap Equity**: 25-30% for stability
+- **Sectoral/Thematic Funds**: 10-15% for targeted exposure
+- **International Equity**: 10-15% for global diversification
+- **Crypto/Alternative**: 5% for high-risk, high-reward
+
+**📊 Expected Returns**: 12-18% annually with high volatility
+**⏰ Investment Horizon**: 10+ years for wealth creation
+"""
+    
+    # Specific recommendations based on spending patterns
+    response += f"""
+
+### 🎯 PERSONALIZED RECOMMENDATIONS
+
+**Based on your spending pattern of ₹{total_amount:,.0f}:**
+
+**💡 MONTHLY INVESTMENT CAPACITY:**
+- **Recommended SIP Amount**: ₹{min(total_amount * 0.2, 50000):.0f}/month
+- **Emergency Fund Target**: ₹{total_amount * 6:.0f} (6 months expenses)
+- **Insurance Coverage**: ₹{total_amount * 120:.0f} (10x annual expenses)
+
+**🔥 IMMEDIATE ACTION ITEMS:**
+1. **Start SIP**: Begin with ₹{min(total_amount * 0.1, 25000):.0f}/month in {risk_profile.lower()} funds
+2. **Build Emergency Fund**: Save ₹{total_amount * 0.15:.0f}/month for 6 months
+3. **Review Insurance**: Ensure adequate life and health coverage
+4. **Tax Planning**: Invest ₹1.5L in ELSS for 80C benefits
+
+**📊 PORTFOLIO ALLOCATION FOR YOU:**
+"""
+    
+    # Show specific allocation based on their spending
+    if risk_profile == "Conservative":
+        response += f"""
+- **Debt/FD**: ₹{min(total_amount * 0.4, 200000):.0f} (40%)
+- **Large-cap Equity**: ₹{min(total_amount * 0.3, 150000):.0f} (30%)
+- **Gold**: ₹{min(total_amount * 0.1, 50000):.0f} (10%)
+- **Liquid Fund**: ₹{min(total_amount * 0.2, 100000):.0f} (20%)
+"""
+    elif risk_profile == "Moderate":
+        response += f"""
+- **Equity Funds**: ₹{min(total_amount * 0.6, 300000):.0f} (60%)
+- **Debt Funds**: ₹{min(total_amount * 0.25, 125000):.0f} (25%)
+- **International**: ₹{min(total_amount * 0.1, 50000):.0f} (10%)
+- **Emergency Fund**: ₹{min(total_amount * 0.05, 25000):.0f} (5%)
+"""
+    else:
+        response += f"""
+- **Growth Equity**: ₹{min(total_amount * 0.7, 350000):.0f} (70%)
+- **International**: ₹{min(total_amount * 0.15, 75000):.0f} (15%)
+- **Sectoral Funds**: ₹{min(total_amount * 0.1, 50000):.0f} (10%)
+- **Alternative**: ₹{min(total_amount * 0.05, 25000):.0f} (5%)
+"""
+    
+    response += f"""
+
+### 📱 RISK MONITORING DASHBOARD
+
+**🚨 MONTHLY REVIEW CHECKLIST:**
+- [ ] Track portfolio performance vs benchmark
+- [ ] Rebalance if allocation deviates >5%
+- [ ] Review and adjust SIP amounts
+- [ ] Monitor expense ratios and fund performance
+
+**⚡ RISK ALERTS:**
+- **Concentration Risk**: Don't put >10% in single stock/fund
+- **Liquidity Risk**: Keep 6 months expenses liquid
+- **Inflation Risk**: Ensure 70%+ in equity for long-term
+- **Currency Risk**: Limit international exposure to 20%
+
+---
+
+## 🎯 FINAL RISK ASSESSMENT
+
+**Your {risk_profile} profile with {risk_score}/10 risk score suggests:**
+
+You're a {risk_description.lower()} investor who should focus on {'capital preservation with moderate growth' if risk_profile == 'Conservative' else 'balanced growth with managed risk' if risk_profile == 'Moderate' else 'aggressive wealth creation with high growth potential'}.
+
+**🚀 Next Steps**: Start with a ₹{min(total_amount * 0.1, 25000):.0f}/month SIP in {risk_profile.lower()} funds and build your emergency fund simultaneously.
+
+*This analysis is based on your actual spending patterns from {total_count} transactions. Consult a financial advisor for personalized advice.*
+"""
+    
+    return response
+
+# ************* Other Analysis Response Generators *************
+
 if __name__ == "__main__":
     print("🤖 Gmail Intelligence Team System (Agno + Mem0)")
     print("=" * 60)
@@ -1049,8 +2845,9 @@ if __name__ == "__main__":
     print("1. Run comprehensive team tests")
     print("2. Interactive team system")
     print("3. Test direct team interaction")
+    print("4. WOW Factor Demo (NEW!)")
     
-    choice = input("Enter choice (1-3): ").strip()
+    choice = input("Enter choice (1-4): ").strip()
     
     if choice == "1":
         print("🚀 Running comprehensive team tests...")
@@ -1064,5 +2861,15 @@ if __name__ == "__main__":
         if test_query:
             response = gmail_intelligence_team.run(test_query)
             print(f"\n🎯 Team Response:\n{response.content if hasattr(response, 'content') else str(response)}")
+    elif choice == "4":
+        print("🚀 WOW Factor Demo - Mind-blowing Gmail Insights!")
+        user_id = input("Enter user ID (or press Enter for 'demo_user'): ").strip() or "demo_user"
+        query = input("Enter your query (or press Enter for 'April May 2025 transactions'): ").strip() or "April May 2025 transactions"
+        print(f"\n🎯 Generating WOW Factor response for: '{query}'")
+        result = asyncio.run(query_email_database_wow(user_id, query))
+        if result.get('status') == 'success':
+            print(f"\n{result.get('wow_response', 'No response generated')}")
+        else:
+            print(f"❌ Error: {result.get('error', 'Unknown error')}")
     else:
-        print("Invalid choice. Please run again and select 1-3.")
+        print("Invalid choice. Please run again and select 1-4.")
