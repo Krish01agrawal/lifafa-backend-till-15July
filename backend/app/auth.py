@@ -39,3 +39,13 @@ def decode_jwt_token(token: str):
         return payload
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid JWT token")
+
+def decode_jwt_token_websocket(token: str):
+    """WebSocket-safe JWT token decoder that returns None on failure."""
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return payload
+    except JWTError:
+        return None

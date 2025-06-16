@@ -15,7 +15,7 @@ from app.auth import verify_google_token, create_jwt_token, decode_jwt_token
 from app.oauth import generate_auth_url, exchange_code_for_tokens
 from app.db import users_collection, emails_collection
 from app.gmail import build_gmail_service, fetch_emails
-from app.mem0_agent import upload_emails_to_mem0, query_mem0
+from app.mem0_agent import upload_emails_to_mem0, query_mem0, process_gmail_data_for_user
 from app.models import GoogleToken, GmailFetchPayload
 from app.websocket import router as websocket_router
 import logging
@@ -446,18 +446,12 @@ async def _trigger_and_process_user_emails(user_id: str, access_token: str, max_
             await emails_collection.insert_many(emails)
             logger.info(f"Emails stored in MongoDB for user_id: {user_id}")
             
-            # Upload to Mem0
-            logger.info(f"Uploading {len(emails)} emails to Mem0 for user_id: {user_id}...")
-            await upload_emails_to_mem0(user_id, emails)
-            logger.info(f"Emails uploaded to Mem0 for user_id: {user_id}")
+            # Upload to Mem0 with enhanced user processing
+            logger.info(f"Processing Gmail data with enhanced integration for user_id: {user_id}...")
+            mem0_result = await process_gmail_data_for_user(user_id, emails)
+            logger.info(f"Gmail data processed with Mem0 integration for user_id: {user_id}")
 
-            # Update initial_gmailData_sync for the user as process completed
-            logger.info(f"Updating initial_gmailData_sync to true for user_id: {user_id}")
-            await users_collection.update_one(
-                {"user_id": user_id},
-                {"$set": {"initial_gmailData_sync": True}}
-            )
-            logger.info(f"initial_gmailData_sync updated for user_id: {user_id}")
+            # The enhanced function already updates user status, so we don't need to do it again
             return {"status": "success", "message": f"Successfully fetched and processed {len(emails)} emails for user {user_id}", "count": len(emails)}
         else:
             # If no emails were fetched, still mark initial_gmailData_sync as true because the fetch process completed.
@@ -511,3 +505,26 @@ async def startup_event():
 async def shutdown_event():
     scheduler.shutdown()
     logger.info("APScheduler shut down.")
+
+@app.post("/gmail/query")
+async def gmail_query_endpoint(payload: TestMem0QueryPayload):
+    """
+    HTTP endpoint for Gmail Intelligence queries (alternative to WebSocket)
+    """
+    logger.info(f"Received Gmail query request for user_id: {payload.user_id} with query: {payload.query}")
+    try:
+        # Use the existing query_mem0 function
+        response = await query_mem0(user_id=payload.user_id, query=payload.query)
+        
+        return {
+            "status": "success",
+            "message": response,
+            "user_id": payload.user_id,
+            "query": payload.query
+        }
+    except Exception as e:
+        logger.error(f"Error in Gmail query endpoint: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An unexpected error occurred: {str(e)}"
+        )

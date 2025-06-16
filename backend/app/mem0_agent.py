@@ -27,6 +27,14 @@ coordination, context awareness, and enhanced user experience.
 """
 
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file (two levels up from this file)
+# mem0_agent.py is in backend/app/mem0_agent.py, .env is in the root
+dotenv_path = os.path.join(os.path.dirname(__file__), '..', '..', '.env')
+load_dotenv(dotenv_path)
+print(f"🔧 Loaded .env from: {dotenv_path}")
+
 import asyncio
 import json
 import re
@@ -39,7 +47,6 @@ from agno.agent import Agent
 from agno.models.openai import OpenAIChat
 from agno.models.anthropic import Claude
 from agno.team.team import Team
-from agno.tools.reasoning import ReasoningTools
 
 # Memory and database imports
 from mem0 import AsyncMemoryClient, MemoryClient
@@ -59,8 +66,10 @@ if not MEM0_API_KEY:
 openai.api_key = OPENAI_API_KEY
 
 # Initialize Mem0 clients
+print(f"🔑 Initializing Mem0 clients with API key: {MEM0_API_KEY[:8]}...{MEM0_API_KEY[-4:] if len(MEM0_API_KEY) > 12 else MEM0_API_KEY}")
 aclient = AsyncMemoryClient()
 sync_client = MemoryClient()
+print(f"✅ Mem0 clients initialized successfully")
 
 # Pydantic Models for Data Validation
 class EmailMessage(BaseModel):
@@ -97,7 +106,6 @@ email_processor_agent = Agent(
     role="Process and categorize email data with Mem0 storage",
     agent_id="email_processor",
     model=OpenAIChat(id="gpt-4o"),
-    tools=[ReasoningTools(add_instructions=True)],
     instructions=[
         "You are an expert email processor that categorizes and extracts insights from email data.",
         "Process emails and store them in Mem0 with proper categorization and metadata.",
@@ -105,7 +113,7 @@ email_processor_agent = Agent(
         "Always provide detailed categorization and extract relevant financial information.",
         "Categorize emails into: banking, food, utilities, shopping, entertainment, investment, reminders, orders, general.",
         "Extract amounts, merchants, payment methods, and timestamps when available.",
-        "Use reasoning to understand email context and provide accurate categorization.",
+        "Provide clear, structured responses without complex reasoning chains.",
     ],
     markdown=True,
 )
@@ -116,7 +124,6 @@ email_query_agent = Agent(
     role="Handle intelligent email search and analysis",
     agent_id="email_query",
     model=OpenAIChat(id="gpt-4o"),
-    tools=[ReasoningTools(add_instructions=True)],
     instructions=[
         "You are an intelligent email query agent that helps users find and analyze their email data.",
         "Use advanced search techniques including sub-query generation and semantic search.",
@@ -124,7 +131,7 @@ email_query_agent = Agent(
         "Excel at understanding user intent and finding relevant emails from Mem0 storage.",
         "Generate multiple related sub-queries to improve search coverage.",
         "Format responses clearly with sections and actionable insights.",
-        "Use reasoning to understand complex queries and provide accurate results.",
+        "Provide direct, helpful responses without complex reasoning chains.",
     ],
     markdown=True,
 )
@@ -135,7 +142,6 @@ email_analytics_agent = Agent(
     role="Generate comprehensive email insights and reports", 
     agent_id="email_analytics",
     model=OpenAIChat(id="gpt-4o"),
-    tools=[ReasoningTools(add_instructions=True)],
     instructions=[
         "You are an email analytics specialist that generates comprehensive insights and reports.",
         "Analyze email patterns, spending habits, subscription management, and financial trends.",
@@ -144,7 +150,7 @@ email_analytics_agent = Agent(
         "Provide actionable insights for better email and financial management.",
         "Use tables and structured formats to present data clearly.",
         "Focus on delivering data-driven observations and recommendations.",
-        "Use reasoning to identify trends and provide strategic insights.",
+        "Provide clear, direct insights without complex reasoning chains.",
     ],
     markdown=True,
 )
@@ -162,22 +168,25 @@ gmail_intelligence_team = Team(
         email_query_agent,
         email_analytics_agent
     ],
-    tools=[ReasoningTools(add_instructions=True)],
     instructions=[
-        "You are a Gmail Intelligence Team that provides comprehensive email management and analytics.",
-        "Collaborate to process, analyze, and provide insights from Gmail email data using Mem0 memory.",
+        "You are a Gmail Intelligence Team that provides email analysis based on ACTUAL email content.",
+        "CRITICAL: Never fabricate or invent data. Only use the actual email content provided in search results.",
+        "If the user asks for recent/latest emails, analyze the most recent emails found in the search results.",
+        "If the user asks for specific insights about emails, provide analysis based on the actual email content.",
+        "For recent email queries, focus on the email content, sender, subject, and any extractable information.",
         "Use the Email Processor Agent for categorizing and storing emails with proper metadata.",
         "Use the Email Query Agent for intelligent search and retrieval of email information.",
-        "Use the Email Analytics Agent for generating comprehensive reports and insights.",
+        "Use the Email Analytics Agent for generating insights based on REAL email data only.",
         "Leverage Mem0 memory for persistent, semantic storage and retrieval of email data.",
-        "Provide structured, actionable responses with clear categorization and insights.",
-        "Focus on financial insights, spending patterns, subscription management, and email organization.",
-        "Ensure all responses are well-formatted, comprehensive, and user-friendly.",
-        "Use reasoning to provide intelligent coordination between agents.",
-        "Only output the final consolidated response, not individual agent responses.",
+        "Provide structured, factual responses based only on the actual search results provided.",
+        "If search results are empty or insufficient, clearly state this instead of fabricating information.",
+        "For queries about latest emails, provide details about the actual email found (subject, sender, content summary).",
+        "Ensure all responses are well-formatted, factual, and based on real email data.",
+        "Only output the final consolidated response based on actual search results, not fictional data.",
+        "If no relevant emails are found, suggest ways to refine the search or explain what data is available.",
     ],
     markdown=True,
-    success_criteria="The team has provided comprehensive email intelligence with proper categorization, storage in Mem0, intelligent search capabilities, and actionable analytics insights.",
+    success_criteria="The team has provided accurate email intelligence based on actual search results with proper analysis of real email content.",
 )
 # *******************************
 
@@ -1070,24 +1079,87 @@ async def upload_emails_to_mem0(user_id: str, emails: List[EmailMessage]) -> str
 async def search_emails_in_mem0(user_id: str, query: str, limit: int = 500) -> List[Dict]:
     """Search emails in Mem0 memory with comprehensive search strategy and error handling"""
     try:
-        # Primary search with original query - add retry logic for API errors
+        query_lower = query.lower()
+        
+        # Check if this is a recent/latest email query
+        is_recent_query = any(word in query_lower for word in ["recent", "latest", "newest", "last"])
+        
+        # Primary search with original query
         results = await search_with_retry(query, user_id, limit)
         
-        # If we get fewer results than expected, try broader searches
-        if len(results) < 100:  # If we have fewer than 100 results, search more broadly
+        # For recent email queries, try to get all emails and sort by timestamp
+        if is_recent_query and len(results) < 10:
+            print(f"🔍 Detected recent email query, searching for all recent emails...")
+            
+            # Search for all emails with broader terms
+            recent_searches = [
+                "email message",
+                "subject",
+                "sender",
+                "2025 2024",
+                "gmail"
+            ]
+            
+            all_results = results.copy() if results else []
+            seen_memories = set()
+            
+            # Add existing results to seen set
+            for result in all_results:
+                if result and isinstance(result, dict):
+                    seen_memories.add(result.get('memory', ''))
+            
+            for recent_search in recent_searches:
+                try:
+                    recent_results = await search_with_retry(recent_search, user_id, 200)
+                    
+                    if recent_results:
+                        for result in recent_results:
+                            if result and isinstance(result, dict):
+                                memory_text = result.get('memory', '')
+                                if memory_text not in seen_memories:
+                                    all_results.append(result)
+                                    seen_memories.add(memory_text)
+                                    
+                except Exception as e:
+                    print(f"❌ Recent search error for '{recent_search}': {e}")
+            
+            # Sort by timestamp or score to get most recent
+            def get_timestamp_score(result):
+                if not result or not isinstance(result, dict):
+                    return 0
+                
+                metadata = result.get('metadata', {})
+                if isinstance(metadata, dict):
+                    timestamp = metadata.get('timestamp')
+                    if timestamp:
+                        try:
+                            from datetime import datetime
+                            dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                            return dt.timestamp()
+                        except:
+                            pass
+                
+                # Fallback to score
+                return result.get('score', 0)
+            
+            all_results.sort(key=get_timestamp_score, reverse=True)
+            results = all_results[:limit]  # Get most recent ones
+            
+        # If we still have few results and it's not a recent query, try broader searches
+        elif len(results) < 100 and not is_recent_query:
             broader_queries = []
             
             # Generate broader search terms based on the original query
-            if any(term in query.lower() for term in ["food", "order", "delivery", "restaurant"]):
+            if any(term in query_lower for term in ["food", "order", "delivery", "restaurant"]):
                 broader_queries.extend(["food", "delivery", "order", "restaurant", "swiggy", "zomato", "ubereats", "dominos"])
             
-            if any(term in query.lower() for term in ["upi", "payment", "transaction"]):
+            if any(term in query_lower for term in ["upi", "payment", "transaction"]):
                 broader_queries.extend(["upi", "payment", "paid", "transaction", "gpay", "phonepe", "paytm"])
             
-            if any(term in query.lower() for term in ["may", "april", "2025"]):
+            if any(term in query_lower for term in ["may", "april", "2025"]):
                 broader_queries.extend(["may 2025", "april 2025", "2025"])
             
-            if any(term in query.lower() for term in ["spending", "expense", "money"]):
+            if any(term in query_lower for term in ["spending", "expense", "money"]):
                 broader_queries.extend(["amount", "rupees", "₹", "paid", "cost", "price"])
             
             # Perform additional searches with broader terms
@@ -1101,7 +1173,7 @@ async def search_emails_in_mem0(user_id: str, query: str, limit: int = 500) -> L
             
             for broader_query in broader_queries:
                 try:
-                    broader_results = await search_with_retry(broader_query, user_id, 500)  # Increased limit
+                    broader_results = await search_with_retry(broader_query, user_id, 500)
                     
                     # Add unique results
                     if broader_results:
@@ -1128,9 +1200,12 @@ async def search_with_retry(query: str, user_id: str, limit: int, max_retries: i
     """Search with retry logic for handling API errors"""
     import asyncio
     
+    print(f"🔍 Mem0 Search - API Key: {MEM0_API_KEY[:8]}...{MEM0_API_KEY[-4:] if len(MEM0_API_KEY) > 12 else MEM0_API_KEY}")
+    
     for attempt in range(max_retries):
         try:
             # Use sync_client for searches with proper error handling
+            print(f"🔄 Attempting Mem0 search for '{query}' (user: {user_id}, limit: {limit})")
             results = sync_client.search(
                 query=query,
                 user_id=user_id,
@@ -1300,135 +1375,48 @@ async def query_email_database(user_id: str, query: str, limit: int = 1000, cate
         
         # Use team to process query with search results - FORCE ALL RESULTS PROCESSING
         team_prompt = f"""
-        🚀 YOU ARE THE WORLD'S MOST ADVANCED GMAIL FINANCIAL INTELLIGENCE SYSTEM 🚀
+        CRITICAL INSTRUCTIONS: Analyze this email query using ONLY the actual search results provided. DO NOT fabricate any data.
 
-        MISSION: Create a response so detailed and insightful that the user thinks "DAMN, that's the power of Gmail Insights!"
+        User Query: "{query}"
+        User ID: {user_id}
+        Search Results Count: {len(search_results)} emails found
+        Transaction Data Count: {len(transaction_data)} processed records
 
-        USER QUERY: "{query}"
-        TRANSACTION DATABASE: {len(search_results)} transactions found
-        RAW DATA: {json.dumps(transaction_data, indent=1)}
+        SEARCH RESULTS (Actual Email Data):
+        {json.dumps(search_results[:10], indent=2) if search_results else "No email results found"}
 
-        🎯 CREATE AN ABSOLUTELY MIND-BLOWING RESPONSE:
+        ANALYSIS INSTRUCTIONS:
+        1. If this is a query about recent/latest emails:
+           - Focus on the most recent emails in the search results
+           - Provide details about the actual email content (subject, sender, snippet)
+           - Extract any relevant information from the email content
+           - Do NOT fabricate financial data or transaction details
+        
+        2. If this is a general email analysis query:
+           - Analyze the actual email content provided
+           - Extract patterns and insights from the real email data
+           - Categorize based on actual email senders and content
+           - Provide statistics based only on the found emails
+        
+        3. Response format:
+           - Start with a clear statement about what emails were found
+           - Provide actual email details (subject, sender, date if available)
+           - Give insights based on the real email content
+           - If insufficient data, suggest how to refine the search
+        
+        4. NEVER DO:
+           - Create fictional transaction amounts or financial data
+           - Invent email content or details not in the search results
+           - Generate fake spending reports or financial analytics
+           - Provide data that contradicts the actual search results
 
-        # 🔥 GMAIL FINANCIAL INTELLIGENCE REPORT 🔥
-        ## Query: "{query}"
+        5. ALWAYS DO:
+           - Base your response entirely on the provided search results
+           - State clearly if no relevant emails were found
+           - Provide factual analysis of the actual email content
+           - Be specific about what data is available vs. what is missing
 
-        ### 💎 EXECUTIVE SUMMARY - YOUR FINANCIAL DNA
-        **🎯 INSTANT INSIGHTS:**
-        - 💰 **Total Spending Power**: ₹[CALCULATE EXACT TOTAL] across [COUNT] transactions
-        - 📊 **Financial Behavior Score**: [ANALYZE PATTERNS]/10 (Based on spending consistency)
-        - 🏆 **Top Spending Category**: [CATEGORY] - [PERCENTAGE]% of total budget
-        - ⚡ **Average Transaction Velocity**: ₹[AMOUNT] every [FREQUENCY]
-        - 🎪 **Spending Personality**: [ANALYZE: Conservative/Moderate/Aggressive spender]
-
-        ### 📋 COMPLETE TRANSACTION BREAKDOWN
-        | 📅 Date | 💰 Amount | 🏪 Merchant | 🎯 Category | 💳 Method | 🔍 Insights |
-        |----------|-----------|-------------|-------------|-----------|-------------|
-        [EXTRACT EVERY SINGLE TRANSACTION WITH REAL DATA - NO PLACEHOLDERS]
-
-        ### 🎯 CATEGORY INTELLIGENCE MATRIX
-        **🍔 FOOD & DINING EMPIRE**
-        - **Swiggy Addiction Level**: ₹[AMOUNT] ([COUNT] orders) - You order every [FREQUENCY] days
-        - **Zomato Relationship**: ₹[AMOUNT] ([COUNT] orders) - [INSIGHT about preferences]
-        - **Restaurant Splurges**: ₹[AMOUNT] - Your fine dining budget
-        - **🔥 FOOD INSIGHT**: You spend [PERCENTAGE]% more on weekends vs weekdays
-        - **💡 OPTIMIZATION**: Switch to cooking [X] meals/week → Save ₹[AMOUNT]/month
-
-        **🛒 SHOPPING PSYCHOLOGY**
-        - **Amazon Dependency**: ₹[AMOUNT] ([COUNT] orders) - [ANALYZE shopping patterns]
-        - **Impulse Purchase Score**: [CALCULATE based on frequency]/10
-        - **Average Cart Value**: ₹[AMOUNT] - [COMPARE to national average]
-        - **🔥 SHOPPING INSIGHT**: [IDENTIFY peak shopping days/times]
-        - **💡 STRATEGY**: [SPECIFIC recommendations based on patterns]
-
-        **💳 SUBSCRIPTION ECOSYSTEM**
-        - **Monthly Recurring**: ₹[AMOUNT] across [COUNT] services
-        - **Subscription Efficiency**: [ANALYZE usage vs cost]
-        - **Hidden Subscriptions**: [IDENTIFY forgotten subscriptions]
-        - **🔥 SUBSCRIPTION INSIGHT**: You're paying for [X] services you barely use
-        - **💡 OPTIMIZATION**: Cancel [SERVICES] → Save ₹[AMOUNT]/year
-
-        ### 🧠 BEHAVIORAL FINANCIAL PSYCHOLOGY
-        **⏰ TIME-BASED SPENDING PATTERNS**
-        - **Peak Spending Hour**: [TIME] - You spend [AMOUNT] more during this hour
-        - **Weekend vs Weekday**: [RATIO] - [INSIGHT about lifestyle]
-        - **Month-end Behavior**: [ANALYZE spending patterns near month-end]
-        - **Payday Effect**: [ANALYZE spending spikes after salary]
-
-        **🎭 MERCHANT RELATIONSHIP ANALYSIS**
-        - **Brand Loyalty Score**: [CALCULATE loyalty to specific merchants]
-        - **Merchant Diversity**: You shop at [COUNT] different places
-        - **Price Sensitivity**: [ANALYZE if user shops for deals vs convenience]
-        - **Geographic Spending**: [ANALYZE local vs online spending]
-
-        ### 🚀 PREDICTIVE FINANCIAL INTELLIGENCE
-        **📈 SPENDING TRAJECTORY**
-        - **Monthly Burn Rate**: ₹[AMOUNT] - [TREND: Increasing/Stable/Decreasing]
-        - **Projected Annual Spending**: ₹[CALCULATE based on patterns]
-        - **Seasonal Variations**: [IDENTIFY seasonal spending patterns]
-        - **Risk Assessment**: [ANALYZE financial stability based on patterns]
-
-        **🎯 PERSONALIZED RECOMMENDATIONS**
-        1. **💰 IMMEDIATE SAVINGS**: [SPECIFIC action] → Save ₹[AMOUNT] this month
-        2. **📊 BUDGET OPTIMIZATION**: [DETAILED budget restructuring advice]
-        3. **🏆 REWARD MAXIMIZATION**: Use [SPECIFIC cards/methods] for [CATEGORIES]
-        4. **⚠️ RISK MITIGATION**: [IDENTIFY potential financial risks]
-        5. **🚀 WEALTH BUILDING**: [SPECIFIC investment/savings strategies]
-
-        ### 🔮 FUTURE FINANCIAL FORECAST
-        **📊 NEXT 30 DAYS PREDICTION**
-        - **Expected Spending**: ₹[CALCULATE based on patterns]
-        - **High-Risk Days**: [IDENTIFY days likely to overspend]
-        - **Savings Opportunities**: [SPECIFIC upcoming chances to save]
-        - **Bill Reminders**: [UPCOMING bills and due dates]
-
-        ### 💎 EXCLUSIVE INSIGHTS (The WOW Factor)
-        **🔥 HIDDEN PATTERNS DISCOVERED:**
-        - [REVEAL surprising patterns user didn't know about themselves]
-        - [COMPARE their spending to similar demographics]
-        - [IDENTIFY their unique financial fingerprint]
-        - [PREDICT their financial personality type]
-
-        **🎪 FINANCIAL PERSONALITY PROFILE:**
-        - **Spending Style**: [DETAILED personality analysis]
-        - **Risk Tolerance**: [ASSESS based on transaction patterns]
-        - **Financial Goals Alignment**: [ANALYZE if spending matches likely goals]
-        - **Behavioral Triggers**: [IDENTIFY what drives their spending decisions]
-
-        ### 🏆 ACTIONABLE INTELLIGENCE DASHBOARD
-        **⚡ IMMEDIATE ACTIONS (Next 7 Days)**
-        1. [SPECIFIC action with exact amount to save]
-        2. [SPECIFIC optimization with clear steps]
-        3. [SPECIFIC opportunity with timeline]
-
-        **🎯 STRATEGIC MOVES (Next 30 Days)**
-        1. [DETAILED strategic recommendation]
-        2. [SPECIFIC financial optimization]
-        3. [CLEAR wealth-building opportunity]
-
-        **🚀 LONG-TERM WEALTH STRATEGY (Next 12 Months)**
-        1. [COMPREHENSIVE financial transformation plan]
-        2. [SPECIFIC investment/savings roadmap]
-        3. [CLEAR path to financial goals]
-
-        ### 📱 SMART ALERTS & NOTIFICATIONS
-        - **Overspending Alert**: You're [PERCENTAGE]% above normal for [CATEGORY]
-        - **Savings Opportunity**: Switch from [X] to [Y] → Save ₹[AMOUNT]
-        - **Reward Optimization**: Use [CARD] for [CATEGORY] → Earn [REWARDS]
-        - **Bill Optimization**: [SPECIFIC bill reduction strategies]
-
-        CRITICAL SUCCESS FACTORS:
-        1. ✅ EXTRACT REAL DATA - Every number must be calculated from actual transactions
-        2. ✅ PROVIDE SPECIFIC INSIGHTS - No generic advice, everything personalized
-        3. ✅ CREATE WOW MOMENTS - Reveal patterns they didn't know existed
-        4. ✅ ACTIONABLE INTELLIGENCE - Every insight must have a clear action
-        5. ✅ FINANCIAL PSYCHOLOGY - Analyze their behavior, not just numbers
-        6. ✅ PREDICTIVE POWER - Show them their financial future
-        7. ✅ EXCLUSIVE INSIGHTS - Information they can't get anywhere else
-
-        🎯 MAKE THEM THINK: "How did Gmail Insights know all this about me?!"
-
-        RESPONSE TONE: Confident, insightful, slightly amazed at the patterns discovered, like a financial detective who just cracked the case of their spending behavior.
+        Provide a comprehensive, factual response based ONLY on the actual search results provided above.
         """
         
         team_response = gmail_intelligence_team.run(team_prompt)
@@ -2873,3 +2861,175 @@ if __name__ == "__main__":
             print(f"❌ Error: {result.get('error', 'Unknown error')}")
     else:
         print("Invalid choice. Please run again and select 1-4.")
+
+# ************* Integration Functions for WebSocket and Main App *************
+
+async def query_mem0(user_id: str, query: str) -> str:
+    """
+    Main query function for WebSocket integration
+    Integrates Query Analyzer → Mem0 Search → AI Response
+    """
+    try:
+        print(f"🔍 Processing query for user {user_id}: '{query}'")
+        print(f"🔑 Using Mem0 API Key: {MEM0_API_KEY[:8]}...{MEM0_API_KEY[-4:] if len(MEM0_API_KEY) > 12 else MEM0_API_KEY}")
+        
+        # Step 1: Analyze and refine query using Query Analyzer Agent
+        refined_query = await analyze_and_refine_query(query)
+        print(f"📝 Refined query: '{refined_query}'")
+        
+        # Step 2: Query Gmail Intelligence Team with refined query
+        result = await query_email_database(user_id, refined_query, limit=1000)
+        
+        if result.get('status') == 'success':
+            return result.get('team_response', 'No response generated')
+        else:
+            return f"❌ Error processing query: {result.get('error', 'Unknown error')}"
+            
+    except Exception as e:
+        print(f"❌ Error in query_mem0: {e}")
+        return f"❌ Sorry, I encountered an error while processing your query: {str(e)}"
+
+async def analyze_and_refine_query(query: str) -> str:
+    """
+    Use Query Analyzer Agent to refine user queries - PRESERVING USER INTENT
+    """
+    try:
+        # Check for specific intent patterns that should NOT be heavily refined
+        query_lower = query.lower()
+        
+        # If user is asking for recent/latest/last emails, preserve that intent
+        if any(word in query_lower for word in ["last", "latest", "recent", "newest", "most recent"]):
+            if any(word in query_lower for word in ["email", "mail", "message"]):
+                # For recent email queries, use timestamp-based search terms
+                return f"recent latest newest {query}"
+        
+        # If user is asking for specific email analysis, preserve specificity
+        if any(word in query_lower for word in ["insight", "analysis", "about", "details"]) and any(word in query_lower for word in ["email", "mail"]):
+            # Don't over-refine analysis requests
+            return query
+        
+        # For general queries, do light refinement
+        from app.query_analyzer_agent import queryAnalyzerAgent
+        
+        # Create a better prompt that preserves intent
+        analysis_prompt = f"""
+        Analyze this user query and provide a LIGHTLY refined search query for Gmail email data.
+        
+        CRITICAL: If the user is asking for recent/latest/last emails, preserve that intent.
+        CRITICAL: If the user is asking for specific insights or analysis, preserve the specificity.
+        
+        Original Query: "{query}"
+        
+        Your task:
+        1. Identify the user's intent (recent emails, specific analysis, transaction search, etc.)
+        2. If asking for recent emails, include temporal terms
+        3. If asking for analysis, preserve the analytical intent
+        4. Add relevant email-related keywords only if needed
+        
+        Return ONLY a refined search query that preserves the original intent.
+        
+        Examples:
+        - "last email" → "latest recent newest email"
+        - "insight about last email" → "recent latest email analysis insight"
+        - "food expenses" → "food delivery swiggy zomato restaurant payment"
+        """
+        
+        # Get refined query from analyzer agent
+        response = queryAnalyzerAgent.run(analysis_prompt)
+        
+        # Extract the refined query from the response
+        if hasattr(response, 'content'):
+            refined_query = response.content.strip()
+        else:
+            refined_query = str(response).strip()
+        
+        # Clean up the response to get just the query
+        lines = refined_query.split('\n')
+        for line in lines:
+            line = line.strip()
+            if line and not line.startswith('#') and not line.startswith('*') and len(line) > 10:
+                # Final check - don't let it become too generic
+                if line.lower() not in ["based on the analysis", "analysis", "email analysis"]:
+                    return line
+        
+        # If refinement failed or became too generic, return original query
+        print(f"⚠️ Query refinement resulted in generic response, using original query")
+        return query
+        
+    except Exception as e:
+        print(f"⚠️ Query analysis failed, using original query: {e}")
+        return query
+
+async def process_gmail_data_for_user(user_id: str, gmail_emails: List[Dict]) -> Dict[str, Any]:
+    """
+    Process Gmail data for a specific user (called from main.py)
+    Automatically uses the signed-in user's user_id
+    """
+    try:
+        print(f"🎯 Processing Gmail data for signed-in user: {user_id}")
+        
+        # Use the existing process_gmail_data function
+        result = await process_gmail_data(user_id, gmail_emails)
+        
+        # Update user status in database to mark Gmail sync as complete
+        from app.db import users_collection
+        await users_collection.update_one(
+            {"user_id": user_id},
+            {"$set": {
+                "initial_gmailData_sync": True,
+                "fetched_email": True,
+                "last_sync_timestamp": datetime.now().isoformat()
+            }}
+        )
+        
+        print(f"✅ Gmail data processed and user status updated for {user_id}")
+        return result
+        
+    except Exception as e:
+        print(f"❌ Error processing Gmail data for user {user_id}: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "user_id": user_id,
+            "timestamp": datetime.now().isoformat()
+        }
+
+# ************* Enhanced WebSocket Integration *************
+
+async def handle_websocket_query(user_id: str, query: str, chat_id: str = None) -> Dict[str, Any]:
+    """
+    Enhanced WebSocket query handler with full pipeline
+    """
+    try:
+        print(f"🌐 WebSocket query from user {user_id} in chat {chat_id}: '{query}'")
+        
+        # Check if user has Gmail data synced
+        from app.db import users_collection
+        user_data = await users_collection.find_one({"user_id": user_id})
+        
+        if not user_data or not user_data.get("initial_gmailData_sync", False):
+            return {
+                "message": "⚠️ Please sync your Gmail data first before querying. Use the Gmail fetch feature in the app.",
+                "type": "warning",
+                "requires_sync": True
+            }
+        
+        # Process query through the complete pipeline
+        response = await query_mem0(user_id, query)
+        
+        return {
+            "message": response,
+            "type": "success",
+            "user_id": user_id,
+            "chat_id": chat_id,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        print(f"❌ WebSocket query error: {e}")
+        return {
+            "message": f"❌ Error processing your query: {str(e)}",
+            "type": "error",
+            "user_id": user_id,
+            "chat_id": chat_id
+        }

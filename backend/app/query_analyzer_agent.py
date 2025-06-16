@@ -10,28 +10,81 @@ from dotenv import load_dotenv
 load_dotenv()
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-print(f"OPENAI_API_KEY: {OPENAI_API_KEY}")
 
 queryAnalyzerAgent = Agent(
-            model=OpenAIChat(id="gpt-3.5-turbo", api_key=OPENAI_API_KEY),
-            tools=[ReasoningTools(add_instructions=True)],
-            instructions="""
-            You are a query analysis expert. Your job is to break down complex user queries into multiple focused sub-queries to reveal user intent and core concepts.
+    model=OpenAIChat(id="gpt-3.5-turbo", api_key=OPENAI_API_KEY),
+    tools=[ReasoningTools(add_instructions=True)],
+    instructions="""
+    You are a Gmail email query optimization expert. Your job is to LIGHTLY refine user queries while PRESERVING their original intent.
 
-            For each query you receive:
-            1. Identify the user's primary intent (what they're trying to accomplish)
-            2. Extract core concepts and entities mentioned
-            3. Break the query into 3-5 focused sub-queries that capture different aspects
-            4. Classify the query type (informational, transactional, navigational, etc.)
-            5. Assess complexity level (simple, moderate, complex)
+    CRITICAL RULES:
+    1. If the user asks for "recent", "latest", "last", or "newest" emails, preserve that temporal intent
+    2. If the user asks for "insight", "analysis", or "about" emails, preserve the analytical intent  
+    3. Never make queries too generic - preserve specificity
+    4. Never fabricate information or create overly broad search terms
 
-            Always use reasoning to think through your analysis step by step.
-            Focus on making sub-queries that are:
-            - Specific and actionable
-            - Covering different aspects of the original query
-            - Useful for search or research purposes
-            """,
-            markdown=True,
-            debug_mode=True,
+    For each query you receive:
+    1. Identify the user's exact intent (recent emails, specific analysis, transaction search, etc.)
+    2. Preserve temporal keywords (recent, latest, last, newest)
+    3. Preserve analytical keywords (insight, analysis, about, details)
+    4. Add relevant email-related keywords ONLY if they help without changing intent
+    5. Return a refined query that maintains the original meaning
+    1. Identify the user's intent (financial analysis, transaction search, spending patterns, subscription management, etc.)
+    2. Extract key entities (dates, amounts, merchants, categories, payment methods)
+    3. Generate optimized search terms that would appear in Gmail emails
+    4. Focus on merchant names, transaction types, amounts, and email content patterns
+    5. Return ONLY the optimized search query, nothing else
+
+    Examples of GOOD refinement:
+    - "last email" → "latest recent newest email" (preserves temporal intent)
+    - "insight about last email" → "insight analysis recent latest email" (preserves both intents)
+    - "food expenses" → "food delivery swiggy zomato restaurant payment" (appropriate expansion)
+
+    Examples of BAD refinement (DO NOT DO):
+    - "last email" → "email communication subject content" (loses temporal intent)
+    - "insight about last email" → "Based on the analysis" (loses all specificity)
+    - Any query → "analysis" or "based on analysis" (too generic)
+    Key Gmail email patterns to consider:
+    - Food delivery: "swiggy", "zomato", "food", "delivery", "order", "meal"
+    - Shopping: "amazon", "flipkart", "purchase", "order", "shipped"
+    - Subscriptions: "netflix", "spotify", "subscription", "renewal", "billing"
+    - Payments: "upi", "payment", "paid", "transaction", "amount", "rupees"
+    - Banking: "bank", "credit card", "debit", "statement", "balance"
+    - Bills: "electricity", "utility", "bill", "due", "reminder"
+
+
+    Always use reasoning to think through the user's intent and preserve it in your refined query.
+    Focus on maintaining the original meaning while adding relevant Gmail-specific terms.
+    """,
+    markdown=True,
+    debug_mode=False,
 )
-queryAnalyzerAgent.print_response("tell me about credit card details")
+
+def analyze_query(query: str) -> str:
+    """
+    Analyze and refine a user query for Gmail email search
+    """
+    try:
+        response = queryAnalyzerAgent.run(query)
+        if hasattr(response, 'content'):
+            return response.content.strip()
+        else:
+            return str(response).strip()
+    except Exception as e:
+        print(f"Query analysis error: {e}")
+        return query  # Fallback to original query
+
+# Test function for development
+if __name__ == "__main__":
+    test_queries = [
+        "Show me my food expenses",
+        "Netflix subscription details",
+        "April 2025 transactions",
+        "Credit card payments"
+    ]
+    
+    print("🔍 Testing Query Analyzer Agent:")
+    for query in test_queries:
+        print(f"\nOriginal: {query}")
+        refined = analyze_query(query)
+        print(f"Refined: {refined}")
