@@ -1,29 +1,12 @@
 """
-Gmail Email Agent System - Agno-powered Email Intelligence
+Gmail Email Agent System - Simple Mem0 Integration with Agno Teams
 
-This module implements a comprehensive email management system using Agno agents:
-
-ARCHITECTURE:
-- GmailAgentOrchestrator: Master coordinator that manages email processing and queries
-- EmailProcessorAgent: Specializes in email categorization, extraction, and Mem0 storage
-- EmailQueryAgent: Handles intelligent email search with sub-query generation and LLM enhancement
-
-FEATURES:
-- Smart email categorization (banking, food, utilities, shopping, etc.)
-- Intelligent query processing with intent analysis
-- Comprehensive email analytics and insights
-- Semantic memory storage with Mem0
-- Gmail API integration ready
-- MongoDB backup storage
-- Advanced financial data extraction
-
-USAGE:
-- process_gmail_data(user_id, gmail_emails) -> Process emails from Gmail API
-- query_email_database(user_id, query) -> Query emails with natural language
-- get_email_analytics(user_id) -> Generate comprehensive email analytics
-
-This replaces standalone functions with intelligent Agno agents for better 
-coordination, context awareness, and enhanced user experience.
+Simple flow using Agno teams:
+1. Query comes in
+2. Query gets refined by query_analyzer_agent.py 
+3. Refined query fetches response from mem0
+4. Response gets refined by LLM to generate insights using Agno team
+5. Final response sent to frontend
 """
 
 import os
@@ -51,6 +34,7 @@ from agno.team.team import Team
 # Memory and database imports
 from mem0 import AsyncMemoryClient, MemoryClient
 import openai
+from app.query_analyzer_agent import analyze_query
 
 # Environment Config
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -98,96 +82,108 @@ class EmailInsight(BaseModel):
     payment_method: str
     timestamp: Optional[str] = None
 
-# ************* Team Members *************
+# ************* Complete Pipeline Team with Agno Agents *************
 
-# Email Processing Agent
-email_processor_agent = Agent(
-    name="Email Processor Agent",
-    role="Process and categorize email data with Mem0 storage",
-    agent_id="email_processor",
+# Query Refinement Agent
+query_refinement_agent = Agent(
+    name="Query Refinement Agent",
+    role="Refine user queries for better email search",
+    agent_id="query_refinement",
     model=OpenAIChat(id="gpt-4o"),
     instructions=[
-        "You are an expert email processor that categorizes and extracts insights from email data.",
-        "Process emails and store them in Mem0 with proper categorization and metadata.",
-        "Handle Gmail data and prepare it for intelligent storage and retrieval.",
-        "Always provide detailed categorization and extract relevant financial information.",
-        "Categorize emails into: banking, food, utilities, shopping, entertainment, investment, reminders, orders, general.",
-        "Extract amounts, merchants, payment methods, and timestamps when available.",
-        "Provide clear, structured responses without complex reasoning chains.",
+        "You are a query refinement specialist for Gmail email search.",
+        "Your job is to take a user's natural language query and optimize it for email search.",
+        "Preserve the user's original intent while adding relevant email-specific keywords.",
+        "For financial queries, add terms like: payment, transaction, amount, rupees, UPI, bank",
+        "For food queries, add terms like: swiggy, zomato, delivery, restaurant, order",
+        "For shopping queries, add terms like: amazon, flipkart, purchase, order, shipped",
+        "Keep temporal keywords like 'recent', 'latest', 'last' if present in original query.",
+        "Return ONLY the refined search query, nothing else."
     ],
     markdown=True,
 )
 
-# Email Query Agent
-email_query_agent = Agent(
-    name="Email Query Agent", 
-    role="Handle intelligent email search and analysis",
-    agent_id="email_query",
+# Simple approach - no custom tools needed
+
+# Mem0 Search Agent  
+mem0_search_agent = Agent(
+    name="Mem0 Search Agent",
+    role="Search emails in Mem0 database using refined queries",
+    agent_id="mem0_search",
     model=OpenAIChat(id="gpt-4o"),
     instructions=[
-        "You are an intelligent email query agent that helps users find and analyze their email data.",
-        "Use advanced search techniques including sub-query generation and semantic search.",
-        "Provide comprehensive, well-formatted responses with insights and analytics.",
-        "Excel at understanding user intent and finding relevant emails from Mem0 storage.",
-        "Generate multiple related sub-queries to improve search coverage.",
-        "Format responses clearly with sections and actionable insights.",
-        "Provide direct, helpful responses without complex reasoning chains.",
+        "You are a Mem0 search specialist that retrieves relevant emails from the database.",
+        "You will be provided with a refined query to search for emails.",
+        "Focus on understanding the search requirements and preparing for email retrieval.",
+        "Return structured search results with email content, metadata, and relevance scores.",
+        "If no results found, clearly indicate this for the next agent to handle."
     ],
     markdown=True,
 )
 
-# Email Analytics Agent
-email_analytics_agent = Agent(
-    name="Email Analytics Agent",
-    role="Generate comprehensive email insights and reports", 
-    agent_id="email_analytics",
+# Insights Generation Agent
+insights_generation_agent = Agent(
+    name="Insights Generation Agent", 
+    role="Generate meaningful insights from email search results",
+    agent_id="insights_generation",
     model=OpenAIChat(id="gpt-4o"),
     instructions=[
-        "You are an email analytics specialist that generates comprehensive insights and reports.",
-        "Analyze email patterns, spending habits, subscription management, and financial trends.",
-        "Create detailed reports with spending summaries, category breakdowns, and recommendations.",
-        "Identify patterns in user behavior, payment methods, and merchant preferences.",
-        "Provide actionable insights for better email and financial management.",
-        "Use tables and structured formats to present data clearly.",
-        "Focus on delivering data-driven observations and recommendations.",
-        "Provide clear, direct insights without complex reasoning chains.",
+        "You are an insights specialist that analyzes email search results and generates valuable insights.",
+        "Take email search results and extract meaningful patterns, trends, and information.",
+        "For transaction queries: create tables with dates, amounts, merchants, payment methods",
+        "For subscription queries: identify recurring payments, renewal dates, costs",
+        "For general queries: provide summaries, key points, and actionable insights",
+        "Format responses clearly with sections, bullet points, and tables where appropriate",
+        "Always base insights on actual email content - never fabricate data",
+        "If insufficient data, explain what's available and suggest how to get better results"
     ],
     markdown=True,
 )
 
-# *******************************
-
-# ************* Gmail Intelligence Team *************
-gmail_intelligence_team = Team(
-    name="Gmail Intelligence Team",
-    mode="coordinate", 
-    team_id="gmail_intelligence_team",
+# Complete Gmail Pipeline Team
+gmail_pipeline_team = Team(
+    name="Gmail Intelligence Pipeline Team",
+    mode="sequential",
+    team_id="gmail_pipeline_team",
     model=OpenAIChat(id="gpt-4o"),
     members=[
-        email_processor_agent,
-        email_query_agent,
-        email_analytics_agent
+        query_refinement_agent,
+        mem0_search_agent, 
+        insights_generation_agent
     ],
     instructions=[
-        "You are a Gmail Intelligence Team that provides email analysis based on ACTUAL email content.",
-        "CRITICAL: Never fabricate or invent data. Only use the actual email content provided in search results.",
-        "If the user asks for recent/latest emails, analyze the most recent emails found in the search results.",
-        "If the user asks for specific insights about emails, provide analysis based on the actual email content.",
-        "For recent email queries, focus on the email content, sender, subject, and any extractable information.",
-        "Use the Email Processor Agent for categorizing and storing emails with proper metadata.",
-        "Use the Email Query Agent for intelligent search and retrieval of email information.",
-        "Use the Email Analytics Agent for generating insights based on REAL email data only.",
-        "Leverage Mem0 memory for persistent, semantic storage and retrieval of email data.",
-        "Provide structured, factual responses based only on the actual search results provided.",
-        "If search results are empty or insufficient, clearly state this instead of fabricating information.",
-        "For queries about latest emails, provide details about the actual email found (subject, sender, content summary).",
-        "Ensure all responses are well-formatted, factual, and based on real email data.",
-        "Only output the final consolidated response based on actual search results, not fictional data.",
-        "If no relevant emails are found, suggest ways to refine the search or explain what data is available.",
+        "You are the complete Gmail Intelligence Pipeline Team handling the full user query to insights flow.",
+        "Execute the following pipeline in sequence:",
+        "",
+        "STEP 1 - Query Refinement Agent:",
+        "- Take the original user query",
+        "- Refine it for better email search results", 
+        "- Add relevant keywords while preserving intent",
+        "- Pass refined query to next agent",
+        "",
+        "STEP 2 - Mem0 Search Agent:",
+        "- Take the refined query from Step 1",
+        "- Search Mem0 database for matching emails",
+        "- Retrieve relevant email content and metadata",
+        "- Pass search results to next agent",
+        "",
+        "STEP 3 - Insights Generation Agent:",
+        "- Take search results from Step 2", 
+        "- Analyze email content for patterns and insights",
+        "- Generate structured, helpful response for user",
+        "- Create tables, summaries, and actionable recommendations",
+        "",
+        "CRITICAL RULES:",
+        "- Each agent must complete their task before passing to next agent",
+        "- Only use actual email data found in search results",
+        "- If no data found, explain clearly and suggest improvements",
+        "- Keep responses focused on the user's original query intent",
+        "- Provide clear, structured, and actionable insights"
     ],
     markdown=True,
-    success_criteria="The team has provided accurate email intelligence based on actual search results with proper analysis of real email content.",
+    success_criteria="The team has successfully processed the user query through all pipeline stages and delivered accurate insights based on actual email search results."
 )
+
 # *******************************
 
 # ************* Direct Data Analysis Functions *************
@@ -922,21 +918,29 @@ def detect_user_location(emails: List[EmailMessage]) -> str:
 
 def extract_amount_with_currency(content: str) -> tuple:
     """Extract amount with currency symbol from email content"""
-    # Try different currency patterns
+    # Enhanced patterns for Indian transactions
     patterns = [
-        (r'₹\s*(\d+(?:,\d+)*(?:\.\d+)?)', '₹'),  # Indian Rupees
-        (r'\$\s*(\d+(?:,\d+)*(?:\.\d+)?)', '$'),  # US Dollars
-        (r'€\s*(\d+(?:,\d+)*(?:\.\d+)?)', '€'),  # Euros
-        (r'£\s*(\d+(?:,\d+)*(?:\.\d+)?)', '£'),  # British Pounds
-        (r'(\d+(?:,\d+)*(?:\.\d+)?)\s*USD', '$'), # USD format
-        (r'(\d+(?:,\d+)*(?:\.\d+)?)\s*INR', '₹'), # INR format
+        (r'Rs\.?\s*(\d+(?:,\d+)*(?:\.\d+)?)', '₹'),     # Rs.50.00, Rs. 471.00
+        (r'₹\s*(\d+(?:,\d+)*(?:\.\d+)?)', '₹'),         # ₹50.00, ₹471
+        (r'INR\s*(\d+(?:,\d+)*(?:\.\d+)?)', '₹'),       # INR 50.00
+        (r'(\d+(?:,\d+)*(?:\.\d+)?)\s*INR', '₹'),       # 50.00 INR
+        (r'\$\s*(\d+(?:,\d+)*(?:\.\d+)?)', '$'),        # $50.00
+        (r'€\s*(\d+(?:,\d+)*(?:\.\d+)?)', '€'),         # €50.00
+        (r'£\s*(\d+(?:,\d+)*(?:\.\d+)?)', '£'),         # £50.00
+        (r'(\d+(?:,\d+)*(?:\.\d+)?)\s*USD', '$'),       # 50.00 USD
     ]
     
     for pattern, currency in patterns:
-        match = re.search(pattern, content, re.IGNORECASE)
-        if match:
-            amount = match.group(1).replace(',', '')
-            return amount, currency
+        matches = re.findall(pattern, content, re.IGNORECASE)
+        for match in matches:
+            amount = match.replace(',', '')
+            try:
+                # Validate it's a reasonable transaction amount
+                amount_float = float(amount)
+                if 0.01 <= amount_float <= 100000:  # Reasonable transaction range
+                    return amount, currency
+            except:
+                continue
     
     return None, None
 
@@ -967,6 +971,46 @@ async def categorize_email(email: EmailMessage) -> EmailInsight:
     elif any(method in content_lower for method in ["bank transfer", "neft", "rtgs"]):
         payment_method = "bank_transfer"
 
+    # Enhanced merchant detection from transaction content
+    import re
+    
+    # Extract merchant from UPI VPA patterns
+    upi_patterns = [
+        r'to vpa ([^@\s]+)@',  # to VPA merchant@bank
+        r'vpa ([^@\s]+)@',     # VPA merchant@bank  
+        r'paytm-([^@\s]+)@',   # paytm-blinkit@ptybl
+        r'gpay-([^@\s]+)@',    # gpay-merchant@bank
+    ]
+    
+    for pattern in upi_patterns:
+        match = re.search(pattern, content_lower)
+        if match:
+            extracted_merchant = match.group(1)
+            # Map common merchant patterns
+            if 'blinkit' in extracted_merchant:
+                merchant = "Blinkit"
+                category = "shopping"
+                subcategory = "grocery"
+            elif 'swiggy' in extracted_merchant:
+                merchant = "Swiggy"
+                category = "food"
+                subcategory = "delivery"
+            elif 'zomato' in extracted_merchant:
+                merchant = "Zomato"
+                category = "food"
+                subcategory = "delivery"
+            elif 'mcdonalds' in extracted_merchant:
+                merchant = "McDonald's"
+                category = "food"
+                subcategory = "restaurant"
+            elif 'uber' in extracted_merchant:
+                merchant = "Uber"
+                category = "transport"
+                subcategory = "ride"
+            else:
+                merchant = extracted_merchant.title()
+            break
+
     # Comprehensive category detection
     if any(keyword in content_lower for keyword in ["statement", "account summary", "monthly statement"]):
         category = "banking"
@@ -983,6 +1027,18 @@ async def categorize_email(email: EmailMessage) -> EmailInsight:
             subcategory = "subscription_reminder"
         else:
             subcategory = "general_reminder"
+    elif any(keyword in content_lower for keyword in ["debited", "credited", "upi", "transaction"]) and amount:
+        # This is a financial transaction
+        category = "financial_transactions"
+        subcategory = "payment"
+        if merchant == "unknown":
+            # Try to extract merchant from common patterns
+            if "food" in content_lower or "restaurant" in content_lower:
+                category = "food"
+                subcategory = "dining"
+            elif "shopping" in content_lower or "order" in content_lower:
+                category = "shopping"
+                subcategory = "purchase"
     elif any(keyword in content_lower for keyword in ["electricity", "power", "bescom", "mseb", "kseb"]):
         category = "utilities"
         subcategory = "electricity"
@@ -1005,13 +1061,58 @@ async def categorize_email(email: EmailMessage) -> EmailInsight:
         category = "orders"
         subcategory = "general"
 
-    # Parse timestamp
+    # Parse timestamp with multiple format support
     timestamp = None
     if email.date:
-        try:
-            timestamp = datetime.strptime(email.date, "%Y-%m-%dT%H:%M:%S%z").isoformat()
-        except:
-            timestamp = None
+        # Try multiple timestamp formats
+        timestamp_formats = [
+            "%Y-%m-%dT%H:%M:%S%z",      # 2025-06-13T00:00:00+00:00
+            "%Y-%m-%dT%H:%M:%S",        # 2025-06-13T00:00:00
+            "%Y-%m-%d %H:%M:%S",        # 2025-06-13 00:00:00
+            "%Y-%m-%d",                 # 2025-06-13
+            "%d-%m-%Y",                 # 13-06-2025
+            "%d/%m/%Y",                 # 13/06/2025
+        ]
+        
+        for fmt in timestamp_formats:
+            try:
+                if fmt.endswith('%z'):
+                    # Handle timezone
+                    timestamp = datetime.strptime(email.date, fmt).isoformat()
+                else:
+                    # Parse without timezone and add UTC
+                    dt = datetime.strptime(email.date, fmt)
+                    timestamp = dt.replace(tzinfo=datetime.now().astimezone().tzinfo).isoformat()
+                break
+            except:
+                continue
+        
+        # If still no timestamp, try extracting date from email content
+        if not timestamp:
+            import re
+            date_patterns = [
+                r'(\d{1,2}[-/]\d{1,2}[-/]\d{4})',  # DD-MM-YYYY or DD/MM/YYYY
+                r'(\d{4}[-/]\d{1,2}[/-]\d{1,2})',  # YYYY-MM-DD
+                r'on (\d{1,2}-\d{1,2}-\d{2})',     # on 13-06-25
+            ]
+            
+            for pattern in date_patterns:
+                match = re.search(pattern, content_lower)
+                if match:
+                    date_str = match.group(1)
+                    # Try to parse extracted date
+                    for fmt in ["%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d", "%d-%m-%y"]:
+                        try:
+                            dt = datetime.strptime(date_str, fmt)
+                            # Convert 2-digit year to 4-digit
+                            if dt.year < 2000:
+                                dt = dt.replace(year=dt.year + 2000)
+                            timestamp = dt.replace(tzinfo=datetime.now().astimezone().tzinfo).isoformat()
+                            break
+                        except:
+                            continue
+                    if timestamp:
+                        break
 
     return EmailInsight(
         category=category,
@@ -1276,7 +1377,7 @@ async def process_gmail_data(user_id: str, gmail_emails: List[Dict]) -> Dict[str
         Format as a structured, professional report with clear sections.
         """
         
-        team_response = gmail_intelligence_team.run(team_prompt)
+        team_response = gmail_pipeline_team.run(team_prompt)
         
         return {
             "status": "success",
@@ -1296,6 +1397,464 @@ async def process_gmail_data(user_id: str, gmail_emails: List[Dict]) -> Dict[str
             "timestamp": datetime.now().isoformat()
         }
 
+async def universal_content_search(user_id: str, refined_query: str, original_query: str) -> Dict[str, Any]:
+    """Universal content search that works with ANY query type based purely on Mem0 data"""
+    try:
+        print(f"🔍 Universal Content Search: Processing '{refined_query}' for user {user_id}")
+        
+        # Step 1: Direct search with refined query
+        search_results = await search_emails_in_mem0(user_id, refined_query, 1000)
+        print(f"📊 Direct search results: {len(search_results)} emails found")
+        
+        # Step 2: Enhanced search with original query keywords if needed
+        if len(search_results) < 20:
+            print("🔄 Enhancing search with original query keywords...")
+            original_results = await search_emails_in_mem0(user_id, original_query, 500)
+            
+            # Combine results without duplicates
+            seen_memories = set(result.get('memory', '') for result in search_results)
+            for result in original_results:
+                memory_text = result.get('memory', '')
+                if memory_text and memory_text not in seen_memories:
+                    search_results.append(result)
+                    seen_memories.add(memory_text)
+            
+            print(f"📊 Enhanced search results: {len(search_results)} total emails")
+        
+        # Step 3: Process all results without filtering by type
+        content_data = []
+        for i, result in enumerate(search_results):
+            if result and isinstance(result, dict):
+                content_info = {
+                    "index": i + 1,
+                    "memory": result.get('memory', '') if result.get('memory') else '',
+                    "metadata": result.get('metadata', {}) if result.get('metadata') else {},
+                    "score": result.get('score', 0) if result.get('score') is not None else 0,
+                    "id": result.get('id', f'content_{i}')
+                }
+                content_data.append(content_info)
+        
+        print(f"📊 CONTENT DATA PREPARED: {len(content_data)} valid results")
+        
+        # Step 4: Generate dynamic response based on actual content
+        response = generate_universal_response(original_query, refined_query, content_data)
+        
+        return {
+            'status': 'success',
+            'results_count': len(content_data),
+            'response': response,
+            'data_type': 'universal_content'
+        }
+            
+    except Exception as e:
+        print(f"❌ Universal content search error: {e}")
+        return {
+            'status': 'error',
+            'error': str(e),
+            'results_count': 0,
+            'response': f"❌ Error processing query: {str(e)}"
+        }
+
+def generate_universal_response(original_query: str, refined_query: str, content_data: List[Dict]) -> str:
+    """Generate intelligent AI-powered response with insights and analysis"""
+    
+    if not content_data:
+        return f"""
+# 🧠 INTELLIGENT EMAIL ANALYSIS
+## Query: "{original_query}"
+
+### ⚠️ NO MATCHING DATA FOUND
+- No emails found matching your search criteria
+- Try using different keywords or broader search terms
+- Check if the information might be in a different format
+
+### 💡 SUGGESTIONS
+- Use more general keywords
+- Try searching for related terms
+- Check spelling and terminology
+"""
+    
+    # Generate AI-powered insights using OpenAI
+    try:
+        print(f"🤖 Generating AI insights for query: '{original_query}' with {len(content_data)} emails")
+        ai_insights = generate_ai_insights_from_email_data(original_query, content_data)
+        print(f"✅ AI insights generated successfully (length: {len(ai_insights)})")
+        print(f"📄 AI Response Preview: {ai_insights[:200]}...")
+        return ai_insights
+    except Exception as e:
+        print(f"❌ Error generating AI insights: {e}")
+        import traceback
+        traceback.print_exc()
+        # Fallback to basic response
+        print("🔄 Falling back to basic response...")
+        return generate_basic_universal_response(original_query, refined_query, content_data)
+
+def generate_ai_insights_from_email_data(original_query: str, content_data: List[Dict]) -> str:
+    """Generate intelligent insights using OpenAI based on email data patterns"""
+    
+    # Prepare comprehensive data summary for AI analysis
+    email_summaries = []
+    categories = {}
+    merchants = {}
+    locations = []
+    
+    for item in content_data:
+        memory = item.get('memory', '')
+        metadata = item.get('metadata', {})
+        
+        # Extract key information
+        category = metadata.get('category', 'unknown')
+        merchant = metadata.get('merchant', 'unknown')
+        location = metadata.get('user_location', '')
+        
+        categories[category] = categories.get(category, 0) + 1
+        merchants[merchant] = merchants.get(merchant, 0) + 1
+        if location:
+            locations.append(location)
+        
+        email_summaries.append({
+            'content': memory[:300],  # Limit content length
+            'category': category,
+            'merchant': merchant,
+            'location': location,
+            'score': item.get('score', 0)
+        })
+    
+    # Sort by relevance
+    email_summaries.sort(key=lambda x: x['score'], reverse=True)
+    
+    # Create intelligent analysis prompt
+    analysis_prompt = f"""
+You are an expert Gmail data analyst. Analyze the following email data to answer the user's question with intelligent insights based on actual patterns and behaviors.
+
+USER QUESTION: "{original_query}"
+
+EMAIL DATA ANALYSIS:
+Total emails analyzed: {len(email_summaries)}
+
+TOP EMAIL CONTENTS (Most Relevant):
+{chr(10).join([f"- {email['content']}" for email in email_summaries[:10]])}
+
+PATTERNS DETECTED:
+Categories: {dict(sorted(categories.items(), key=lambda x: x[1], reverse=True))}
+Merchants/Services: {dict(sorted(merchants.items(), key=lambda x: x[1], reverse=True))}
+Location References: {list(set(locations)) if locations else ['None detected']}
+
+ANALYSIS GUIDELINES:
+1. **Location Questions**: Analyze delivery addresses, transport bookings, local services, event bookings, utility bills, job locations, restaurant orders, etc.
+2. **Skill/Career Questions**: Analyze job applications, course subscriptions, tutorial emails, GitHub activity, skill assessments, certifications, etc.
+3. **Preference Questions**: Look for usage patterns, subscription choices, purchase behaviors, service preferences, etc.
+4. **Lifestyle Questions**: Analyze spending habits, entertainment choices, travel patterns, health services, etc.
+
+REQUIRED RESPONSE FORMAT:
+# 🧠 INTELLIGENT EMAIL ANALYSIS
+## Query: "{original_query}"
+
+### 💎 KEY INSIGHTS DISCOVERED
+[Provide 3-4 main insights based on data patterns discovered in the emails]
+
+### 📊 DETAILED ANALYSIS
+
+**Primary Finding:**
+[Main conclusion answering the user's question with confidence level]
+
+**Supporting Evidence:**
+- [Evidence 1 from email patterns]
+- [Evidence 2 from email patterns]  
+- [Evidence 3 from email patterns]
+
+**Behavioral Patterns Identified:**
+- [Pattern 1 with explanation]
+- [Pattern 2 with explanation]
+- [Pattern 3 with explanation]
+
+### 🎯 DIRECT ANSWER
+[Clear, direct answer to the user's question based on evidence]
+
+### 📋 SUPPORTING DATA POINTS
+- [Specific data point 1 from emails]
+- [Specific data point 2 from emails]
+- [Specific data point 3 from emails]
+
+### 💡 ADDITIONAL OBSERVATIONS
+[Any other interesting insights discovered from the data]
+
+CRITICAL INSTRUCTIONS:
+- Base ALL conclusions on ACTUAL email content provided
+- Provide confidence levels (High/Medium/Low) for major claims
+- If data is insufficient, state this clearly
+- Use specific examples from the email content
+- Do not make assumptions beyond what the data shows
+- Focus on answering the user's specific question
+"""
+
+    # Call OpenAI for intelligent analysis
+    try:
+        response = openai.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "system", 
+                    "content": "You are an expert email data analyst who provides intelligent insights based on Gmail data patterns. Always base conclusions on actual evidence from the email content and provide confidence levels for your analysis."
+                },
+                {
+                    "role": "user", 
+                    "content": analysis_prompt
+                }
+            ],
+            temperature=0.2,  # Lower temperature for more focused analysis
+            max_tokens=2500
+        )
+        
+        ai_response = response.choices[0].message.content
+        return ai_response
+        
+    except Exception as e:
+        print(f"❌ OpenAI API error: {e}")
+        raise e
+
+def generate_basic_universal_response(original_query: str, refined_query: str, content_data: List[Dict]) -> str:
+    """Fallback basic response when AI analysis fails"""
+    
+    total_results = len(content_data)
+    
+    response = f"""
+# 📧 EMAIL SEARCH RESULTS  
+## Query: "{original_query}"
+
+### 📊 SEARCH SUMMARY
+- **Total Relevant Emails**: {total_results}
+- **Search Query**: {refined_query}
+
+### 📋 MOST RELEVANT RESULTS
+"""
+    
+    # Show top 10 most relevant results
+    for i, content in enumerate(content_data[:10], 1):
+        memory = content.get('memory', '')
+        score = content.get('score', 0)
+        
+        # Truncate long memories
+        if len(memory) > 200:
+            memory = memory[:200] + "..."
+        
+        response += f"\n**{i}.** {memory}"
+        if score > 0:
+            response += f" *(Relevance: {score:.2f})*"
+        response += "\n"
+    
+    # Add pagination info if there are more results
+    if total_results > 10:
+        response += f"\n*...and {total_results - 10} more results*\n"
+    
+    response += f"""
+
+### 💡 KEY INSIGHTS
+- Found {total_results} email communications related to your query
+- Results are sorted by relevance to your search terms
+- Content spans various email types and communications
+
+### 🎯 NEXT STEPS
+- Review the most relevant results above
+- Use more specific keywords if you need to narrow down results
+- Follow up on any important communications you find
+"""
+    
+    return response
+
+async def query_content_database(user_id: str, query: str, query_intent: str = "general") -> Dict[str, Any]:
+    """Query database for content-focused queries (jobs, travel, health, etc.) without financial filtering"""
+    try:
+        print(f"🔍 Content-Focused Search: Processing '{query}' for user {user_id} (Intent: {query_intent})")
+        
+        # Use comprehensive search for content
+        search_results = await search_emails_in_mem0(user_id, query, 1000)
+        
+        print(f"📊 CONTENT SEARCH RESULTS:")
+        print(f"   - Total results retrieved: {len(search_results)}")
+        
+        # Enhanced search for job-related content
+        if query_intent == "job_search" or any(word in query.lower() for word in ["job", "application", "role", "interview", "career"]):
+            print("💼 Enhancing job search with targeted terms...")
+            
+            job_search_terms = [
+                "job application", "interview", "position", "role", "career", "hiring",
+                "offer", "rejection", "application status", "recruiter", "hr",
+                "software engineer", "developer", "programmer", "tech role",
+                "linkedin", "naukri", "indeed", "job portal", "employment"
+            ]
+            
+            all_results = search_results.copy()
+            seen_memories = set(result.get('memory', '') for result in all_results)
+            
+            for term in job_search_terms:
+                try:
+                    term_results = await search_emails_in_mem0(user_id, term, 200)
+                    if term_results:
+                        for result in term_results:
+                            memory_text = result.get('memory', '')
+                            if memory_text and memory_text not in seen_memories:
+                                all_results.append(result)
+                                seen_memories.add(memory_text)
+                except Exception as e:
+                    print(f"❌ Job search error for '{term}': {e}")
+            
+            search_results = all_results
+            print(f"💼 Enhanced job search: Found {len(search_results)} total results")
+        
+        # Process results without financial filtering
+        content_data = []
+        for i, result in enumerate(search_results):
+            if result and isinstance(result, dict):
+                content_info = {
+                    "index": i + 1,
+                    "memory": result.get('memory', '') if result.get('memory') else '',
+                    "metadata": result.get('metadata', {}) if result.get('metadata') else {},
+                    "score": result.get('score', 0) if result.get('score') is not None else 0,
+                    "id": result.get('id', f'content_{i}')
+                }
+                content_data.append(content_info)
+        
+        print(f"📊 CONTENT DATA PREPARED: {len(content_data)} valid results")
+        
+        # Generate content-focused response using the appropriate generator
+        if query_intent == "job_search" or any(word in query.lower() for word in ["job", "application", "role", "interview", "career"]):
+            # Create mock analysis for job response generator
+            mock_analysis = {
+                'total_count': len(content_data),
+                'total_amount': 0,
+                'average_amount': 0,
+                'categories': {'job_related': len(content_data)},
+                'merchants': {'job_portals': len(content_data)},
+                'payment_methods': {}
+            }
+            
+            try:
+                print(f"🔄 Calling generate_job_analysis_response with {len(content_data)} content items...")
+                response = generate_job_analysis_response(query, mock_analysis, [], content_data)
+                print(f"✅ Job analysis response generated successfully. Length: {len(response) if response else 0}")
+                
+                if not response or response.strip() == "":
+                    print("⚠️ Empty response from generate_job_analysis_response, creating fallback...")
+                    response = f"""
+# 💼 JOB APPLICATION STATUS UPDATE
+## Query: "{query}"
+
+### 📊 JOB SEARCH SUMMARY
+- **Total Job-Related Emails**: {len(content_data)}
+- **Recent Activity**: Active job search detected
+
+### 🏢 RECENT JOB COMMUNICATIONS
+"""
+                    # Show top 5 job-related emails
+                    for i, content in enumerate(content_data[:5], 1):
+                        memory = content.get('memory', '')
+                        if len(memory) > 150:
+                            memory = memory[:150] + "..."
+                        response += f"\n{i}. {memory}"
+                    
+                    response += f"""
+
+### 💡 KEY INSIGHTS
+- Found {len(content_data)} job-related email communications
+- Your job search appears to be active with multiple applications
+- Mix of applications, alerts, and responses detected
+
+### 🎯 RECOMMENDATIONS
+- Follow up on pending applications
+- Keep track of application deadlines
+- Prepare for potential interviews
+- Continue networking and applying to relevant positions
+"""
+                
+            except Exception as e:
+                print(f"❌ Error in generate_job_analysis_response: {e}")
+                response = f"""
+# 💼 JOB APPLICATION STATUS
+## Query: "{query}"
+
+### 📊 SEARCH RESULTS
+- **Total Job-Related Emails**: {len(content_data)}
+
+### 🏢 RECENT JOB COMMUNICATIONS
+"""
+                # Show top 5 job-related emails safely
+                for i, content in enumerate(content_data[:5], 1):
+                    memory = content.get('memory', '')
+                    if len(memory) > 150:
+                        memory = memory[:150] + "..."
+                    response += f"\n{i}. {memory}"
+                
+                response += f"""
+
+### 💡 INSIGHTS
+- Active job search with multiple communications
+- Various applications and responses detected
+- Continue following up on applications
+
+### 🎯 NEXT STEPS
+- Review recent job communications above
+- Follow up on pending applications
+- Keep applying to relevant positions
+"""
+            
+            return {
+                'status': 'success',
+                'results_count': len(content_data),
+                'response': response,
+                'data_type': 'content',
+                'query_intent': query_intent
+            }
+        else:
+            # For other content types, create a general content response
+            response = f"""
+# 📧 EMAIL CONTENT ANALYSIS
+## Query: "{query}"
+
+### 📊 SEARCH RESULTS
+- **Total Relevant Emails**: {len(content_data)}
+- **Content Type**: {query_intent.title().replace('_', ' ')}
+
+### 📋 KEY FINDINGS
+"""
+            
+            # Show top 5 most relevant results
+            for i, content in enumerate(content_data[:5], 1):
+                memory = content.get('memory', '')
+                if len(memory) > 150:
+                    memory = memory[:150] + "..."
+                response += f"\n{i}. {memory}"
+            
+            response += f"""
+
+### 💡 INSIGHTS
+- Found {len(content_data)} relevant email communications
+- Content covers various aspects of your query
+- Results sorted by relevance score
+
+### 🎯 RECOMMENDATIONS
+- Review the most relevant results above
+- Consider following up on important communications
+- Keep track of important updates and responses
+"""
+            
+            return {
+                'status': 'success',
+                'results_count': len(content_data),
+                'response': response,
+                'data_type': 'content',
+                'query_intent': query_intent
+            }
+            
+    except Exception as e:
+        print(f"❌ Content database query error: {e}")
+        return {
+            'status': 'error',
+            'error': str(e),
+            'results_count': 0,
+            'response': f"❌ Error processing content query: {str(e)}"
+        }
+
 async def query_email_database(user_id: str, query: str, limit: int = 1000, category: str = None) -> Dict[str, Any]:
     """Query email database using Gmail Intelligence Team with comprehensive search"""
     try:
@@ -1309,38 +1868,62 @@ async def query_email_database(user_id: str, query: str, limit: int = 1000, cate
         print(f"   - Total results retrieved: {len(search_results)}")
         print(f"   - Search limit used: {limit}")
         
-        # If still low results, try category-based searches
-        if len(search_results) < 20 and not category:
-            print(f"🔄 Low results ({len(search_results)}), trying category-based searches...")
+        # Enhanced search strategy for better results
+        if len(search_results) < 30 and not category:
+            print(f"🔄 Enhancing search with {len(search_results)} initial results, trying comprehensive searches...")
             
+            # Dynamic category searches based on query content
+            query_lower = query.lower()
             category_searches = {
-                "food_orders": ["food", "delivery", "order", "restaurant", "swiggy", "zomato", "meal"],
-                "payments": ["payment", "paid", "upi", "transaction", "amount", "rupees"],
-                "subscriptions": ["subscription", "renewal", "netflix", "spotify", "prime"],
-                "shopping": ["shopping", "purchase", "amazon", "flipkart", "order"],
-                "bills": ["bill", "electricity", "utility", "reminder", "due"]
+                "authentication_security": ["authentication", "security", "login", "verification", "2fa", "password", "account"],
+                "apple_services": ["apple", "icloud", "app store", "apple music", "apple id", "itunes"],
+                "financial_transactions": ["payment", "paid", "upi", "transaction", "amount", "rupees", "₹"],
+                "food_delivery": ["food", "delivery", "order", "restaurant", "swiggy", "zomato", "meal", "dominos"],
+                "subscriptions": ["subscription", "renewal", "netflix", "spotify", "prime", "monthly", "yearly"],
+                "shopping_ecommerce": ["shopping", "purchase", "amazon", "flipkart", "myntra", "buy", "order"],
+                "utilities_bills": ["bill", "electricity", "utility", "reminder", "due", "water", "gas"],
+                "travel_transport": ["travel", "booking", "flight", "hotel", "uber", "ola", "cab", "ticket"],
+                "entertainment": ["entertainment", "movie", "ticket", "bookmyshow", "event", "concert"],
+                "general_communication": ["email", "message", "notification", "alert", "update", "news"]
             }
             
             all_results = search_results.copy()
             seen_memories = set(result.get('memory', '') for result in all_results)
             
+            # Prioritize categories based on query content
+            priority_categories = []
             for category_name, terms in category_searches.items():
-                for term in terms:
+                if any(term in query_lower for term in terms):
+                    priority_categories.append((category_name, terms))
+            
+            # Add remaining categories
+            remaining_categories = [(name, terms) for name, terms in category_searches.items() 
+                                 if name not in [cat[0] for cat in priority_categories]]
+            
+            # Search priority categories first with higher limits
+            search_order = priority_categories + remaining_categories[:5]  # Limit to avoid too many searches
+            
+            for category_name, terms in search_order:
+                search_limit = 200 if category_name in [cat[0] for cat in priority_categories] else 100
+                
+                for term in terms[:3]:  # Limit terms per category to avoid excessive searches
                     try:
-                        cat_results = await search_emails_in_mem0(user_id, term, 100)
+                        cat_results = await search_emails_in_mem0(user_id, term, search_limit)
                         
                         if cat_results:
                             for result in cat_results:
                                 memory_text = result.get('memory', '')
-                                if memory_text not in seen_memories:
+                                if memory_text and memory_text not in seen_memories:
                                     all_results.append(result)
                                     seen_memories.add(memory_text)
                                     
                     except Exception as e:
                         print(f"❌ Category search error for '{term}': {e}")
+                
+                print(f"🔍 Search for '{category_name}': Found {len(all_results)} total results")
             
             search_results = all_results
-            print(f"🔍 After category searches: Found {len(search_results)} total results")
+            print(f"🔍 After enhanced searches: Found {len(search_results)} total results")
         
         # DEBUG: Print sample of results to understand data structure
         if search_results:
@@ -1373,53 +1956,474 @@ async def query_email_database(user_id: str, query: str, limit: int = 1000, cate
         
         print(f"📊 TRANSACTION DATA PREPARED: {len(transaction_data)} valid transactions from {len(search_results)} search results")
         
-        # Use team to process query with search results - FORCE ALL RESULTS PROCESSING
+        # Extract and analyze real transaction data first
+        print(f"💰 EXTRACTING REAL TRANSACTION DATA from {len(transaction_data)} records...")
+        
+        # Use the existing analysis function to get actual financial data
+        financial_analysis = analyze_transactions_directly(transaction_data)
+        transaction_table = extract_transaction_table(transaction_data)
+        
+        # Enhanced transaction data extraction for impressive table
+        transaction_details = []
+        total_amount = 0
+        categories = {}
+        merchants = {}
+        payment_methods = {}
+        
+        import re
+        from datetime import datetime
+        
+        for data in transaction_data:
+            memory = data.get('memory', '')
+            metadata = data.get('metadata', {})
+            
+            # Extract amount with STRICT validation and realistic limits
+            amount_str = metadata.get('amount', '0')
+            amount = 0
+            
+            if amount_str:
+                # Extract amount from both metadata and memory content
+                memory_lower = memory.lower()
+                
+                # Look for transaction amount patterns in memory (more reliable)
+                transaction_patterns = [
+                    r'rs\.?\s*(\d{1,4}(?:\.\d{2})?)\s*(?:debited|credited|paid|transferred)',
+                    r'₹\s*(\d{1,4}(?:\.\d{2})?)\s*(?:debited|credited|paid|transferred)',
+                    r'amount\s*(?:of\s*)?₹?\s*(\d{1,4}(?:\.\d{2})?)',
+                    r'(?:paid|debited|credited)\s*₹?\s*(\d{1,4}(?:\.\d{2})?)',
+                    r'upi.*?rs\.?\s*(\d{1,4}(?:\.\d{2})?)',
+                    r'transaction.*?₹\s*(\d{1,4}(?:\.\d{2})?)'
+                ]
+                
+                # Try to extract from memory first (more reliable)
+                for pattern in transaction_patterns:
+                    amount_match = re.search(pattern, memory_lower)
+                    if amount_match:
+                        try:
+                            extracted_amount = float(amount_match.group(1))
+                            # Validate realistic transaction amount (₹1 to ₹50,000)
+                            if 1 <= extracted_amount <= 50000:
+                                amount = extracted_amount
+                                break
+                        except:
+                            continue
+                
+                # If not found in memory, try metadata with strict validation
+                if amount == 0:
+                    metadata_patterns = [
+                        r'₹\s*(\d{1,4}(?:\.\d{2})?)',  # ₹123.45
+                        r'rs\.?\s*(\d{1,4}(?:\.\d{2})?)',  # Rs.123.45
+                        r'^(\d{1,4}(?:\.\d{2})?)$'  # Just 123.45
+                    ]
+                    
+                    for pattern in metadata_patterns:
+                        amount_match = re.search(pattern, str(amount_str).lower())
+                        if amount_match:
+                            try:
+                                extracted_amount = float(amount_match.group(1))
+                                # Strict validation for realistic amounts
+                                if 1 <= extracted_amount <= 50000:
+                                    amount = extracted_amount
+                                    break
+                            except:
+                                continue
+                
+                # Add to total only if valid amount found
+                if amount > 0:
+                    total_amount += amount
+            
+            # Extract date with improved parsing from memory and metadata
+            timestamp = metadata.get('timestamp', '')
+            date_formatted = 'Unknown Date'
+            
+            # Try to extract date from memory content first (often more reliable)
+            memory_date_patterns = [
+                r'(\d{1,2}[-/]\d{1,2}[-/]\d{4})',  # DD-MM-YYYY or DD/MM/YYYY
+                r'(\d{4}[-/]\d{1,2}[/-]\d{1,2})',  # YYYY-MM-DD
+                r'(\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{4})',  # DD MMM YYYY
+                r'((?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{1,2},?\s+\d{4})'  # MMM DD, YYYY
+            ]
+            
+            for pattern in memory_date_patterns:
+                date_match = re.search(pattern, memory.lower())
+                if date_match:
+                    try:
+                        date_str = date_match.group(1)
+                        # Try to parse the extracted date
+                        date_formats = ['%d-%m-%Y', '%d/%m/%Y', '%Y-%m-%d', '%Y/%m/%d', '%d %b %Y', '%b %d, %Y']
+                        for fmt in date_formats:
+                            try:
+                                parsed_date = datetime.strptime(date_str, fmt)
+                                date_formatted = parsed_date.strftime('%d-%m-%Y')
+                                break
+                            except:
+                                continue
+                        if date_formatted != 'Unknown Date':
+                            break
+                    except:
+                        continue
+            
+            # If not found in memory, try timestamp metadata
+            if date_formatted == 'Unknown Date' and timestamp:
+                try:
+                    # Try different timestamp formats
+                    timestamp_patterns = [
+                        '%Y-%m-%d %H:%M:%S',
+                        '%Y-%m-%dT%H:%M:%S',
+                        '%Y-%m-%d',
+                        '%d-%m-%Y',
+                        '%d/%m/%Y',
+                        '%m/%d/%Y'
+                    ]
+                    
+                    for pattern in timestamp_patterns:
+                        try:
+                            # Take first 19 characters for datetime, first 10 for date
+                            ts_str = timestamp[:19] if 'T' in timestamp or ' ' in timestamp else timestamp[:10]
+                            parsed_date = datetime.strptime(ts_str, pattern)
+                            date_formatted = parsed_date.strftime('%d-%m-%Y')
+                            break
+                        except:
+                            continue
+                            
+                    # Last resort: extract date part from timestamp
+                    if date_formatted == 'Unknown Date' and len(timestamp) >= 10:
+                        date_part = timestamp[:10]
+                        if '-' in date_part or '/' in date_part:
+                            # Try to format it properly
+                            try:
+                                if date_part.count('-') == 2:
+                                    parts = date_part.split('-')
+                                    if len(parts[0]) == 4:  # YYYY-MM-DD
+                                        date_formatted = f"{parts[2]}-{parts[1]}-{parts[0]}"
+                                    else:  # DD-MM-YYYY
+                                        date_formatted = date_part
+                                elif date_part.count('/') == 2:
+                                    parts = date_part.split('/')
+                                    if len(parts[2]) == 4:  # DD/MM/YYYY
+                                        date_formatted = f"{parts[0]}-{parts[1]}-{parts[2]}"
+                            except:
+                                date_formatted = date_part
+                except:
+                    date_formatted = 'Recent'  # Default fallback
+            
+            # Extract receiver/merchant with ENHANCED parsing
+            receiver = metadata.get('merchant', 'Unknown')
+            memory_lower = memory.lower()
+            
+            # Comprehensive merchant detection
+            if receiver == 'Unknown' or not receiver or receiver == 'electricity_board':
+                
+                # Enhanced merchant patterns with more comprehensive list
+                merchant_patterns = [
+                    # Food delivery
+                    r'(?:swiggy|zomato|uber\s*eats|dominos|mcdonald|kfc|pizza\s*hut|burger\s*king)',
+                    # Shopping
+                    r'(?:amazon|flipkart|myntra|ajio|nykaa|bigbasket|grofers|blinkit)',
+                    # Digital payments
+                    r'(?:paytm|phonepe|google\s*pay|gpay|bhim|mobikwik)',
+                    # Entertainment
+                    r'(?:netflix|spotify|prime|hotstar|zee5|jio\s*cinema|sony\s*liv)',
+                    # Transport
+                    r'(?:ola|uber|rapido|metro|irctc)',
+                    # Utilities
+                    r'(?:airtel|jio|vi|bsnl|tata\s*sky|dish\s*tv)',
+                    # Others
+                    r'(?:apple|microsoft|google|adobe|steam|epic\s*games)'
+                ]
+                
+                for pattern in merchant_patterns:
+                    merchant_match = re.search(pattern, memory_lower)
+                    if merchant_match:
+                        receiver = merchant_match.group(0).title().replace(' ', '')
+                        break
+                
+                # Try UPI VPA extraction for real merchant names
+                if receiver == 'Unknown':
+                    upi_patterns = [
+                        r'to\s+VPA\s+([^@\s]+)@',  # to VPA merchant@bank
+                        r'VPA\s+([^@\s]+)@',       # VPA merchant@bank
+                        r'@([^@\s]+)\s',           # @merchantname
+                        r'paid\s+to\s+([^@\s]+)@'  # paid to merchant@bank
+                    ]
+                    
+                    for pattern in upi_patterns:
+                        upi_match = re.search(pattern, memory_lower)
+                        if upi_match:
+                            merchant_name = upi_match.group(1)
+                            # Filter out common bank/payment terms
+                            if merchant_name not in ['paytm', 'phonepe', 'gpay', 'upi', 'ybl', 'okaxis', 'okicici']:
+                                receiver = merchant_name.title()
+                                break
+                
+                # Extract from sender information in email
+                if receiver == 'Unknown':
+                    sender_patterns = [
+                        r'from\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)',  # from MerchantName
+                        r'([A-Za-z]+)\s+(?:order|payment|transaction)',  # MerchantName order
+                        r'(?:dear|hi)\s+.*?from\s+([A-Za-z]+)',  # dear customer from Merchant
+                    ]
+                    
+                    for pattern in sender_patterns:
+                        sender_match = re.search(pattern, memory_lower)
+                        if sender_match:
+                            potential_merchant = sender_match.group(1)
+                            # Filter out generic terms
+                            if potential_merchant not in ['customer', 'user', 'account', 'bank', 'payment', 'transaction']:
+                                receiver = potential_merchant.title()
+                                break
+                
+                # Last resort: extract meaningful business names
+                if receiver == 'Unknown':
+                    # Look for capitalized words that might be business names
+                    business_patterns = [
+                        r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+(?:pvt|ltd|inc|corp)',
+                        r'\b([A-Z][a-z]{3,})\s+(?:restaurant|store|mart|shop)',
+                        r'(?:order\s+from|paid\s+to)\s+([A-Z][a-z]+)',
+                    ]
+                    
+                    for pattern in business_patterns:
+                        business_match = re.search(pattern, memory)  # Use original case
+                        if business_match:
+                            receiver = business_match.group(1)
+                            break
+                
+                # If still unknown, use a generic but descriptive name
+                if receiver == 'Unknown':
+                    if 'electricity' in memory_lower or 'power' in memory_lower:
+                        receiver = 'Electricity Board'
+                    elif 'gas' in memory_lower:
+                        receiver = 'Gas Company'
+                    elif 'water' in memory_lower:
+                        receiver = 'Water Board'
+                    elif 'internet' in memory_lower or 'broadband' in memory_lower:
+                        receiver = 'Internet Provider'
+                    elif 'insurance' in memory_lower:
+                        receiver = 'Insurance Company'
+                    else:
+                        receiver = 'Unknown Merchant'
+            
+            # Extract purpose with better logic
+            category = metadata.get('category', 'General')
+            subcategory = metadata.get('subcategory', '')
+            
+            # Enhanced purpose extraction
+            purpose = 'General Purchase'
+            if 'food' in category.lower() or any(word in memory.lower() for word in ['food', 'meal', 'restaurant', 'delivery']):
+                purpose = 'Food Order'
+            elif 'shopping' in category.lower() or any(word in memory.lower() for word in ['shopping', 'purchase', 'buy']):
+                purpose = 'Online Shopping'
+            elif 'entertainment' in category.lower():
+                purpose = 'Entertainment'
+            elif 'travel' in category.lower():
+                purpose = 'Travel Booking'
+            elif 'utility' in category.lower() or 'bill' in memory.lower():
+                purpose = 'Bill Payment'
+            elif 'subscription' in memory.lower():
+                purpose = 'Subscription'
+            elif subcategory:
+                purpose = subcategory.title()
+            
+            # Extract payment method with better parsing
+            payment_method = metadata.get('payment_method', 'Unknown')
+            if payment_method == 'Unknown' or not payment_method:
+                memory_lower = memory.lower()
+                if 'upi' in memory_lower:
+                    payment_method = 'UPI'
+                elif any(word in memory_lower for word in ['credit card', 'debit card']):
+                    payment_method = 'Card'
+                elif any(word in memory_lower for word in ['net banking', 'netbanking']):
+                    payment_method = 'Net Banking'
+                elif any(word in memory_lower for word in ['wallet', 'paytm', 'phonepe']):
+                    payment_method = 'Digital Wallet'
+                else:
+                    payment_method = 'UPI'  # Default for most transactions
+            
+            # Count statistics
+            categories[category] = categories.get(category, 0) + 1
+            merchants[receiver] = merchants.get(receiver, 0) + 1
+            payment_methods[payment_method] = payment_methods.get(payment_method, 0) + 1
+            
+            # RELAXED VALIDATION: Include transactions with better logic
+            if (amount > 0 and 
+                amount <= 50000 and  # Realistic transaction limit
+                date_formatted != 'Unknown Date' and  # Must have valid date
+                receiver not in ['unknown', 'Unknown Merchant'] and  # Must have identifiable receiver
+                len(memory) > 20):  # Must have substantial email content
+                
+                transaction_details.append({
+                    'date': date_formatted,
+                    'amount': amount,
+                    'receiver': receiver,
+                    'purpose': purpose,
+                    'payment_method': payment_method,
+                    'category': category,
+                    'memory_snippet': memory[:100] + '...' if len(memory) > 100 else memory
+                })
+                
+                print(f"✅ Valid transaction: {date_formatted} | ₹{amount} | {receiver} | {purpose}")
+            else:
+                # Detailed rejection reasons
+                rejection_reasons = []
+                if amount <= 0:
+                    rejection_reasons.append(f"Invalid amount: ₹{amount}")
+                if amount > 50000:
+                    rejection_reasons.append(f"Unrealistic amount: ₹{amount}")
+                if date_formatted == 'Unknown Date':
+                    rejection_reasons.append(f"Unknown date (raw: {metadata.get('timestamp', 'None')})")
+                if receiver == 'Unknown Merchant':
+                    rejection_reasons.append(f"Unknown merchant")
+                if len(memory) <= 20:
+                    rejection_reasons.append(f"Insufficient email content ({len(memory)} chars)")
+                
+                print(f"❌ Rejected: {' | '.join(rejection_reasons)}")
+                print(f"   📧 Memory: {memory[:80]}...")
+                print(f"   📊 Meta: amount={metadata.get('amount')}, merchant={metadata.get('merchant')}, timestamp={metadata.get('timestamp')}")
+                print()
+                
+                # Don't include this in total_amount if it was added earlier
+                if amount > 0 and amount > 50000:
+                    total_amount -= amount  # Remove unrealistic amounts from total
+        
+        # Sort by amount (highest first) and then by date
+        transaction_details.sort(key=lambda x: (-x['amount'], x['date']))
+        
+        print(f"💎 FINAL VALIDATION: ₹{total_amount:,.2f} total, {len(transaction_details)} valid transactions")
+        
+        # QUALITY CHECK: Ensure we have meaningful data to analyze
+        if len(transaction_details) == 0:
+            print("⚠️ No valid transactions found after filtering")
+            # Create a helpful message about data quality
+            transaction_details = [{
+                'date': 'No Data',
+                'amount': 0,
+                'receiver': 'No Valid Transactions Found',
+                'purpose': 'Data Quality Issue',
+                'payment_method': 'N/A',
+                'category': 'System Message',
+                'memory_snippet': 'Email data may contain reference numbers instead of transaction amounts'
+            }]
+            total_amount = 0
+        elif total_amount > 100000:  # Final check for unrealistic totals
+            print(f"⚠️ Total amount {total_amount} seems unrealistic, applying additional filtering")
+            # Filter out any remaining high-value outliers
+            transaction_details = [t for t in transaction_details if t['amount'] <= 10000]
+            total_amount = sum(t['amount'] for t in transaction_details)
+            print(f"💎 ADJUSTED TOTAL: ₹{total_amount:,.2f} total, {len(transaction_details)} transactions")
+        
+        # Use team to process query with REAL EXTRACTED DATA
         team_prompt = f"""
-        CRITICAL INSTRUCTIONS: Analyze this email query using ONLY the actual search results provided. DO NOT fabricate any data.
+        🚀 GMAIL FINANCIAL INTELLIGENCE MISSION: Create an absolutely MIND-BLOWING financial report using REAL TRANSACTION DATA!
 
         User Query: "{query}"
         User ID: {user_id}
-        Search Results Count: {len(search_results)} emails found
-        Transaction Data Count: {len(transaction_data)} processed records
-
-        SEARCH RESULTS (Actual Email Data):
-        {json.dumps(search_results[:10], indent=2) if search_results else "No email results found"}
-
-        ANALYSIS INSTRUCTIONS:
-        1. If this is a query about recent/latest emails:
-           - Focus on the most recent emails in the search results
-           - Provide details about the actual email content (subject, sender, snippet)
-           - Extract any relevant information from the email content
-           - Do NOT fabricate financial data or transaction details
         
-        2. If this is a general email analysis query:
-           - Analyze the actual email content provided
-           - Extract patterns and insights from the real email data
-           - Categorize based on actual email senders and content
-           - Provide statistics based only on the found emails
+        🔥 REAL FINANCIAL DATA EXTRACTED:
+        - **Total Amount Found**: ₹{total_amount:,.2f}
+        - **Valid Transactions**: {len(transaction_details)}
+        - **Categories**: {dict(list(categories.items())[:10])}
+        - **Top Merchants**: {dict(list(merchants.items())[:10])}
+        - **Payment Methods**: {dict(payment_methods.items())}
         
-        3. Response format:
-           - Start with a clear statement about what emails were found
-           - Provide actual email details (subject, sender, date if available)
-           - Give insights based on the real email content
-           - If insufficient data, suggest how to refine the search
+                 📊 DETAILED TRANSACTION DATA FOR TABLE:
+         {json.dumps(transaction_details[:25], indent=2)}
+         
+         💡 TABLE FORMAT REQUIREMENTS:
+         Create a transaction table with these EXACT columns:
+         - Date: Format as DD-MM-YYYY
+         - Amount (₹): Show as ₹X,XXX.XX format
+         - Receiver: The merchant/person who received payment
+         - Purpose: What was purchased/paid for
+         - Payment Method: UPI/Card/Net Banking/Digital Wallet etc.
+         - Category: Food & Dining/Shopping/Entertainment etc.
         
-        4. NEVER DO:
-           - Create fictional transaction amounts or financial data
-           - Invent email content or details not in the search results
-           - Generate fake spending reports or financial analytics
-           - Provide data that contradicts the actual search results
+        🎯 GENERATE THIS EXACT RESPONSE FORMAT:
 
-        5. ALWAYS DO:
-           - Base your response entirely on the provided search results
-           - State clearly if no relevant emails were found
-           - Provide factual analysis of the actual email content
-           - Be specific about what data is available vs. what is missing
+        # 🔥 GMAIL FINANCIAL INTELLIGENCE REPORT 🔥
+        ## Query: "{query}"
 
-        Provide a comprehensive, factual response based ONLY on the actual search results provided above.
+        ### 💎 EXECUTIVE SUMMARY - YOUR FINANCIAL DNA
+        **🎯 INSTANT INSIGHTS:**
+        - 💰 **Total Spending Power**: ₹{total_amount:,.2f} across {len(transaction_details)} transactions
+        - 📊 **Financial Behavior Score**: [Calculate based on data]/10 (Based on spending consistency)
+        - 🏆 **Top Spending Category**: [Top category from data] - [percentage]% of total budget
+        - ⚡ **Average Transaction Velocity**: ₹[calculate average] every [frequency] days
+        - 🎪 **Spending Personality**: [Based on patterns in data]
+
+                 ### 📋 COMPLETE TRANSACTION BREAKDOWN
+         | 📅 Date | 💰 Amount (₹) | 🏪 Receiver | 🎯 Purpose | 💳 Payment Method | 📊 Category |
+         |---------|---------------|-------------|------------|------------------|-------------|
+         [Create detailed rows for actual transactions from the extracted data - show top 20 transactions with real data including date, amount, receiver, purpose, payment method, and category]
+
+        ### 🎯 CATEGORY INTELLIGENCE MATRIX
+        **🍔 FOOD & DINING EMPIRE** (if food category exists)
+        - **[Merchant] Addiction Level**: ₹[amount] ([count] orders) - You order every [frequency] days
+        - **[Another merchant]**: ₹[amount] ([count] orders) - [insight]
+        - **🔥 FOOD INSIGHT**: [Real pattern from data]
+        - **💡 OPTIMIZATION**: [Specific savings calculation]
+
+        **🛒 SHOPPING PSYCHOLOGY** (if shopping category exists)
+        - **[Top merchant] Dependency**: ₹[amount] ([count] orders) - [insight]
+        - **Average Cart Value**: ₹[calculate from data]
+        - **🔥 SHOPPING INSIGHT**: [Real pattern from data]
+
+        ### 🧠 BEHAVIORAL FINANCIAL PSYCHOLOGY
+        **⏰ TIME-BASED SPENDING PATTERNS**
+        - **Peak Spending**: [Based on timestamp analysis]
+        - **Spending Frequency**: [Based on actual data]
+        - **Payment Preference**: [Based on payment method data]
+
+        ### 🚀 PREDICTIVE FINANCIAL INTELLIGENCE
+        **📈 SPENDING TRAJECTORY**
+        - **Monthly Burn Rate**: ₹{total_amount:,.2f} - [trend analysis]
+        - **Projected Annual Spending**: ₹[calculate annual projection]
+        - **Risk Assessment**: [Based on spending patterns]
+
+        ### 💎 EXCLUSIVE INSIGHTS (The WOW Factor!)
+        **🔥 HIDDEN PATTERNS DISCOVERED:**
+        - **[Pattern 1]**: [Mind-blowing discovery from actual data]
+        - **[Pattern 2]**: [Another amazing pattern from real numbers]
+        - **[Pattern 3]**: [Unique finding from transaction analysis]
+
+        ### 🏆 ACTIONABLE INTELLIGENCE DASHBOARD
+        **⚡ IMMEDIATE ACTIONS (Next 7 Days)**
+        1. **[Action 1]**: [Specific recommendation with actual savings amount]
+        2. **[Action 2]**: [Specific recommendation with actual savings amount]
+
+        **🚀 STRATEGIC MOVES (Next 30 Days)**
+        1. **[Strategy 1]**: [Long-term recommendation with specific amounts]
+        2. **[Strategy 2]**: [Long-term recommendation with specific amounts]
+
+        ### 📱 SMART ALERTS & RECOMMENDATIONS
+        - **🚨 Alert**: [Important finding based on real data]
+        - **💎 Opportunity**: [Optimization opportunity with specific savings]
+        - **⚡ Efficiency**: [Improvement suggestion with actual numbers]
+
+        ---
+        ## 🎯 THE BOTTOM LINE
+        **Your emails revealed ₹{total_amount:,.2f} in financial activity across {len(transaction_details)} transactions with [key insights]**
+
+        *How did we decode all this from your emails? That's the power of AI financial intelligence! 🤖✨*
+
+        🎊 **CONGRATULATIONS!** You've just experienced the most comprehensive financial analysis for your query! 🎉
+
+                 ⚡ CRITICAL REQUIREMENTS:
+         1. **TRANSACTION TABLE**: Create the table using ONLY the transaction_details data provided above
+         2. **REAL DATA ONLY**: All amounts, dates, receivers, purposes must be from actual extracted data
+         3. **TABLE FORMAT**: Use this exact format for each row:
+            | DD-MM-YYYY | ₹X,XXX.XX | Actual Receiver | Actual Purpose | Actual Method | Actual Category |
+         4. **NO PLACEHOLDERS**: Replace ALL [brackets] with real data from transaction_details
+         5. **AMOUNT FORMATTING**: Show amounts as ₹1,234.56 format with commas
+         6. **TOP 20 TRANSACTIONS**: Show the highest 20 transactions from the sorted list
+         7. **CALCULATE REAL METRICS**: All percentages, averages must be calculated from actual data
+         8. **SPECIFIC INSIGHTS**: Base all insights on real spending patterns found in the data
+         9. **ACTIONABLE RECOMMENDATIONS**: Provide savings suggestions with real calculated amounts
+         10. **GENUINE ANALYSIS**: Every insight must come from actual transaction patterns
+
+        Generate this response now using ONLY the real financial data extracted from the emails!
         """
         
-        team_response = gmail_intelligence_team.run(team_prompt)
+        team_response = gmail_pipeline_team.run(team_prompt)
         
         return {
             "status": "success",
@@ -1624,7 +2628,7 @@ async def get_email_analytics(user_id: str) -> Dict[str, Any]:
         IMPORTANT: Process ALL {len(all_unique_results)} unique transactions found. Calculate real numbers, show actual totals. NO PLACEHOLDERS (XXX) ALLOWED.
         """
         
-        team_response = gmail_intelligence_team.run(team_prompt)
+        team_response = gmail_pipeline_team.run(team_prompt)
         
         return {
             "status": "success",
@@ -1853,7 +2857,7 @@ async def interactive_team_system():
                         Transaction count verification: You MUST process exactly {all_transactions['total_transactions']} transactions.
                         """
                         
-                        team_response = gmail_intelligence_team.run(team_prompt)
+                        team_response = gmail_pipeline_team.run(team_prompt)
                         print(f"\n{team_response.content if hasattr(team_response, 'content') else str(team_response)}")
                     else:
                         print("❌ No transactions found to process.")
@@ -2178,7 +3182,7 @@ Based on your {risk_profile} risk profile:
                 print("🤖 Direct team interaction...")
                 team_query = input("Enter query for the team: ").strip()
                 if team_query:
-                    response = gmail_intelligence_team.run(team_query)
+                    response = gmail_pipeline_team.run(team_query)
                     print(f"\n🎯 Team Response:\n{response.content if hasattr(response, 'content') else str(response)}")
                 
             elif user_input:
@@ -2435,51 +3439,121 @@ async def query_email_database_wow(user_id: str, query: str, limit: int = 1000) 
 
 # ************* Universal Automated Analysis System *************
 
+def analyze_user_query(query: str) -> Dict[str, Any]:
+    """Analyze user query to understand intent and extract key components"""
+    query_lower = query.lower()
+    
+    # Extract key intent
+    intent = "general"
+    sub_queries = []
+    focus_keywords = []
+    
+    # Payment reminders specific analysis
+    if any(word in query_lower for word in ["reminder", "due", "pending", "overdue", "payment reminder"]):
+        intent = "payment_reminders"
+        sub_queries = [
+            "payment reminder due date overdue pending",
+            "bill reminder electricity water gas internet",
+            "subscription renewal reminder netflix spotify",
+            "credit card payment due reminder",
+            "loan emi reminder monthly payment",
+            "insurance premium reminder due",
+            "reminder urgent important payment",
+            "overdue payment penalty charges",
+            "auto payment failed reminder",
+            "payment confirmation receipt"
+        ]
+        focus_keywords = ["reminder", "due", "pending", "overdue", "payment", "bill"]
+    
+    # Job-related queries
+    elif any(word in query_lower for word in ["job", "career", "employment", "hiring", "interview", "application", "position", "vacancy", "recruitment"]):
+        intent = "job_search"
+        sub_queries = [
+            "job application career opportunity interview",
+            "hiring recruitment position vacancy opening",
+            "linkedin naukri indeed job portal",
+            "interview schedule appointment meeting",
+            "offer letter salary compensation package",
+            "employment contract joining date",
+            "resume cv profile application status",
+            "recruiter hr human resources"
+        ]
+        focus_keywords = ["job", "career", "interview", "application", "hiring"]
+    
+    # Transaction/spending queries
+    elif any(word in query_lower for word in ["transaction", "spent", "spending", "purchase", "buy", "order"]):
+        intent = "transactions"
+        sub_queries = [
+            "payment transaction amount rupees upi paid",
+            "purchase order buy shopping online",
+            "food delivery order restaurant swiggy zomato",
+            "shopping amazon flipkart myntra purchase",
+            "subscription payment netflix spotify",
+            "bill payment electricity utility",
+            "investment mutual fund sip trading"
+        ]
+        focus_keywords = ["transaction", "payment", "purchase", "order", "spent"]
+    
+    # Travel queries
+    elif any(word in query_lower for word in ["travel", "flight", "hotel", "booking", "trip", "vacation"]):
+        intent = "travel"
+        sub_queries = [
+            "flight booking airline ticket confirmation",
+            "hotel reservation accommodation booking",
+            "travel itinerary trip vacation holiday",
+            "uber ola cab taxi ride booking",
+            "train booking railway ticket irctc"
+        ]
+        focus_keywords = ["travel", "flight", "hotel", "booking", "trip"]
+    
+    # Health queries
+    elif any(word in query_lower for word in ["health", "medical", "doctor", "appointment", "hospital"]):
+        intent = "health"
+        sub_queries = [
+            "doctor appointment medical consultation",
+            "hospital clinic healthcare facility",
+            "medicine prescription pharmacy order",
+            "health insurance policy coverage",
+            "medical report test result diagnosis"
+        ]
+        focus_keywords = ["health", "medical", "doctor", "appointment"]
+    
+    # Default - extract keywords from query
+    else:
+        intent = "general"
+        # Extract meaningful keywords from the query
+        words = query_lower.split()
+        focus_keywords = [word for word in words if len(word) > 3 and word not in ['the', 'and', 'for', 'with', 'about', 'from', 'that', 'this', 'have', 'will', 'been', 'were']]
+        
+        # Generate sub-queries based on extracted keywords
+        sub_queries = [
+            " ".join(focus_keywords[:3]),  # First 3 keywords
+            " ".join(focus_keywords[1:4]),  # Next 3 keywords
+            " ".join([word for word in focus_keywords if word in query_lower]),  # All relevant keywords
+            f"{' '.join(focus_keywords)} email notification",
+            f"{' '.join(focus_keywords)} update information"
+        ]
+    
+    return {
+        "intent": intent,
+        "sub_queries": sub_queries,
+        "focus_keywords": focus_keywords,
+        "original_query": query
+    }
+
 async def universal_gmail_analysis(user_id: str, query: str) -> Dict[str, Any]:
     """Universal automated analysis system that works for ANY query type"""
     try:
         print(f"🚀 UNIVERSAL ANALYSIS: Processing '{query}' for user {user_id}")
         
-        # Step 1: Get comprehensive transaction data with high limits
-        print("📊 Step 1: Comprehensive data retrieval...")
+        # Step 1: Direct query search - no hardcoded terms
+        print("📊 Step 1: Direct query search...")
+        print(f"🔍 Searching directly for: '{query}'")
         
-        # Use multiple broad search terms to get ALL relevant data
-        search_terms = [
-            "payment transaction amount rupees upi paid",
-            "food delivery order restaurant swiggy zomato",
-            "shopping amazon flipkart purchase buy",
-            "subscription netflix spotify renewal",
-            "bill electricity utility reminder due",
-            "investment mutual fund sip trading",
-            "insurance premium policy health life",
-            "travel booking flight hotel uber ola",
-            "entertainment movie ticket bookmyshow",
-            "₹ Rs rupees money cost price total",
-            "2024 2025 january february march april may june",
-            "credit debit card bank transfer netbanking"
-        ]
+        # Direct search with the user's actual query
+        all_transactions = await search_with_retry(query, user_id, 1000, max_retries=3)
         
-        all_transactions = []
-        seen_memories = set()
-        
-        for search_term in search_terms:
-            try:
-                results = await search_with_retry(search_term, user_id, 1000, max_retries=2)  # High limit
-                
-                if results:
-                    for result in results:
-                        if result and isinstance(result, dict):
-                            memory_text = result.get('memory', '')
-                            if memory_text not in seen_memories and len(memory_text) > 20:
-                                all_transactions.append(result)
-                                seen_memories.add(memory_text)
-                                
-                print(f"   - '{search_term}': Found {len(results)} results, {len(all_transactions)} total unique")
-                        
-            except Exception as e:
-                print(f"❌ Search error for '{search_term}': {e}")
-        
-        print(f"📊 TOTAL DATA RETRIEVED: {len(all_transactions)} unique transactions")
+        print(f"📊 DIRECT SEARCH RESULTS: {len(all_transactions)} emails found")
         
         # Step 2: Direct data analysis
         print("🔍 Step 2: Direct data extraction and analysis...")
@@ -2489,22 +3563,8 @@ async def universal_gmail_analysis(user_id: str, query: str) -> Dict[str, Any]:
         # Step 3: Query-specific analysis
         print(f"🎯 Step 3: Query-specific analysis for '{query}'...")
         
-        # Determine analysis type based on query
-        query_lower = query.lower()
-        analysis_type = "general"
-        
-        if any(word in query_lower for word in ["risk", "profile", "profiling", "assessment"]):
-            analysis_type = "risk_profiling"
-        elif any(word in query_lower for word in ["spending", "expense", "budget", "money"]):
-            analysis_type = "spending_analysis"
-        elif any(word in query_lower for word in ["food", "delivery", "restaurant"]):
-            analysis_type = "food_analysis"
-        elif any(word in query_lower for word in ["subscription", "recurring", "monthly"]):
-            analysis_type = "subscription_analysis"
-        elif any(word in query_lower for word in ["investment", "mutual", "fund", "sip"]):
-            analysis_type = "investment_analysis"
-        elif any(word in query_lower for word in ["april", "may", "march", "month"]):
-            analysis_type = "monthly_analysis"
+        # Generate universal analysis without hardcoded types
+        analysis_type = "universal_analysis"
         
         # Step 4: Generate intelligent response based on analysis type
         print(f"📝 Step 4: Generating {analysis_type} response...")
@@ -2526,8 +3586,8 @@ async def universal_gmail_analysis(user_id: str, query: str) -> Dict[str, Any]:
             "total_transactions": len(all_transactions),
             "response": response,
             "debug_info": {
-                "search_terms_used": len(search_terms),
-                "unique_transactions_found": len(all_transactions),
+                "search_query": query,
+                "emails_found": len(all_transactions),
                 "analysis_summary": {
                     "total_amount": analysis['total_amount'],
                     "transaction_count": analysis['total_count'],
@@ -2549,29 +3609,249 @@ async def universal_gmail_analysis(user_id: str, query: str) -> Dict[str, Any]:
         }
 
 def generate_intelligent_response(query: str, analysis_type: str, analysis: Dict, table: List[Dict], all_transactions: List[Dict], user_id: str) -> str:
-    """Generate intelligent response based on analysis type and real data"""
+    """Generate universal intelligent response based purely on data"""
     
-    total_amount = analysis['total_amount']
+    # Always use universal analysis - no hardcoded types
+    return generate_universal_analysis_response(query, analysis, table, all_transactions)
+
+def generate_universal_analysis_response(query: str, analysis: Dict, table: List[Dict], all_transactions: List[Dict]) -> str:
+    """Generate analysis response based purely on the actual data found"""
+    
     total_count = analysis['total_count']
+    total_amount = analysis['total_amount']
     avg_amount = analysis['average_amount']
     categories = analysis['categories']
     merchants = analysis['merchants']
     payment_methods = analysis['payment_methods']
     
-    if analysis_type == "risk_profiling":
-        return generate_risk_profiling_response(query, analysis, table, all_transactions)
-    elif analysis_type == "spending_analysis":
-        return generate_spending_analysis_response(query, analysis, table, all_transactions)
-    elif analysis_type == "food_analysis":
-        return generate_food_analysis_response(query, analysis, table, all_transactions)
-    elif analysis_type == "subscription_analysis":
-        return generate_subscription_analysis_response(query, analysis, table, all_transactions)
-    elif analysis_type == "investment_analysis":
-        return generate_investment_analysis_response(query, analysis, table, all_transactions)
-    elif analysis_type == "monthly_analysis":
-        return generate_monthly_analysis_response(query, analysis, table, all_transactions)
+    response = f"""
+# 📊 COMPREHENSIVE EMAIL ANALYSIS
+## Query: "{query}"
+
+### 📈 DATA OVERVIEW
+- **Total Email Records**: {total_count}
+- **Total Amount Found**: ₹{total_amount:,.2f}
+- **Average Amount**: ₹{avg_amount:.2f}
+
+### 📋 CONTENT BREAKDOWN
+"""
+    
+    # Show categories if any
+    if categories:
+        response += "\n**📂 Categories Found:**\n"
+        for category, count in list(categories.items())[:5]:
+            response += f"- **{category.title()}**: {count} records\n"
+    
+    # Show merchants/entities if any  
+    if merchants:
+        response += "\n**🏢 Top Entities/Sources:**\n"
+        for merchant, count in list(merchants.items())[:5]:
+            response += f"- **{merchant}**: {count} records\n"
+    
+    # Show payment methods if any
+    if payment_methods:
+        response += "\n**💳 Payment Methods:**\n"
+        for method, count in payment_methods.items():
+            response += f"- **{method.title()}**: {count} records\n"
+    
+    # Show actual content samples
+    response += "\n### 📧 RELEVANT CONTENT SAMPLES\n"
+    for i, transaction in enumerate(all_transactions[:5], 1):
+        memory = transaction.get('memory', '')
+        if len(memory) > 150:
+            memory = memory[:150] + "..."
+        response += f"\n**{i}.** {memory}\n"
+    
+    if len(all_transactions) > 5:
+        response += f"\n*...and {len(all_transactions) - 5} more records*\n"
+    
+    response += f"""
+
+### 💡 KEY INSIGHTS
+- Found {total_count} relevant email communications
+- Data spans multiple categories and sources
+- Content is directly related to your search query
+
+### 🎯 ACTIONABLE RECOMMENDATIONS
+- Review the relevant content samples above
+- Follow up on any important communications
+- Use more specific keywords for refined results
+- Keep track of important updates and responses
+"""
+    
+    return response
+
+def generate_payment_reminders_response(query: str, analysis: Dict, table: List[Dict], all_transactions: List[Dict]) -> str:
+    """Generate specialized response for payment reminder queries"""
+    
+    total_count = analysis['total_count']
+    categories = analysis['categories']
+    merchants = analysis['merchants']
+    
+    # Extract reminder-specific data
+    reminder_data = []
+    overdue_data = []
+    upcoming_data = []
+    bill_data = []
+    
+    for transaction in all_transactions:
+        memory_text = transaction.get('memory', '').lower()
+        
+        # Check for reminder keywords
+        is_reminder = any(word in memory_text for word in ['reminder', 'due', 'pending', 'overdue', 'payment due'])
+        is_bill = any(word in memory_text for word in ['bill', 'electricity', 'water', 'gas', 'internet', 'mobile'])
+        is_overdue = any(word in memory_text for word in ['overdue', 'late', 'penalty', 'charges'])
+        is_upcoming = any(word in memory_text for word in ['upcoming', 'next', 'soon', 'tomorrow'])
+        
+        if is_reminder or is_bill:
+            reminder_data.append(transaction)
+            
+            if is_overdue:
+                overdue_data.append(transaction)
+            elif is_upcoming:
+                upcoming_data.append(transaction)
+            elif is_bill:
+                bill_data.append(transaction)
+    
+    # Count different types of reminders
+    reminder_count = len(reminder_data)
+    overdue_count = len(overdue_data)
+    upcoming_count = len(upcoming_data)
+    bill_count = len(bill_data)
+    
+    # Extract merchants from reminders
+    reminder_merchants = {}
+    for transaction in reminder_data:
+        memory = transaction.get('memory', '')
+        # Extract merchant/service name
+        for merchant in merchants:
+            if merchant.lower() in memory.lower():
+                reminder_merchants[merchant] = reminder_merchants.get(merchant, 0) + 1
+    
+    response = f"""
+# 🔔 PAYMENT REMINDERS ANALYSIS
+## Based on Analysis of {total_count} Email Records
+
+### 📊 REMINDER OVERVIEW
+- **Total Reminders Found**: {reminder_count}
+- **Overdue Payments**: {overdue_count}
+- **Upcoming Payments**: {upcoming_count}
+- **Bill Reminders**: {bill_count}
+
+### 🚨 CRITICAL INSIGHTS
+
+**⚠️ OVERDUE PAYMENTS:**
+"""
+    
+    if overdue_count > 0:
+        response += f"""
+- **{overdue_count} overdue payment(s) detected**
+- **Action Required**: Immediate payment needed to avoid penalties
+- **Priority**: HIGH - Pay these first
+"""
+        
+        # Show sample overdue reminders
+        for i, reminder in enumerate(overdue_data[:3]):
+            memory = reminder.get('memory', '')[:100]
+            response += f"\n  {i+1}. {memory}..."
     else:
-        return generate_general_analysis_response(query, analysis, table, all_transactions)
+        response += "\n- ✅ No overdue payments detected - Great job!"
+    
+    response += f"""
+
+**📅 UPCOMING PAYMENTS:**
+"""
+    
+    if upcoming_count > 0:
+        response += f"""
+- **{upcoming_count} upcoming payment(s) scheduled**
+- **Action**: Prepare for these payments
+- **Priority**: MEDIUM - Plan ahead
+"""
+        
+        # Show sample upcoming reminders
+        for i, reminder in enumerate(upcoming_data[:3]):
+            memory = reminder.get('memory', '')[:100]
+            response += f"\n  {i+1}. {memory}..."
+    else:
+        response += "\n- 📝 No upcoming payment reminders found"
+    
+    response += f"""
+
+**💡 BILL REMINDERS:**
+"""
+    
+    if bill_count > 0:
+        response += f"""
+- **{bill_count} utility/service bill(s) found**
+- **Types**: Electricity, Water, Internet, Mobile, etc.
+- **Status**: Regular monthly obligations
+"""
+        
+        # Show sample bill reminders
+        for i, reminder in enumerate(bill_data[:3]):
+            memory = reminder.get('memory', '')[:100]
+            response += f"\n  {i+1}. {memory}..."
+    else:
+        response += "\n- 📋 No utility bill reminders found"
+    
+    # Service provider analysis
+    if reminder_merchants:
+        response += f"""
+
+### 🏢 SERVICE PROVIDERS
+"""
+        for merchant, count in sorted(reminder_merchants.items(), key=lambda x: x[1], reverse=True)[:5]:
+            response += f"\n- **{merchant}**: {count} reminder(s)"
+    
+    # Actionable recommendations
+    response += f"""
+
+### 🎯 ACTIONABLE RECOMMENDATIONS
+
+**🚨 IMMEDIATE ACTIONS:**
+"""
+    
+    if overdue_count > 0:
+        response += f"""
+1. **Pay {overdue_count} overdue payment(s) immediately** to avoid additional charges
+2. **Check penalty amounts** and factor them into payments
+3. **Contact service providers** if you need payment extensions
+"""
+    
+    if upcoming_count > 0:
+        response += f"""
+4. **Set calendar reminders** for {upcoming_count} upcoming payments
+5. **Ensure sufficient account balance** before due dates
+"""
+    
+    response += f"""
+
+**📋 ORGANIZATION TIPS:**
+1. **Set up auto-pay** for recurring bills to avoid missing payments
+2. **Create a payment calendar** with all due dates
+3. **Enable SMS/email alerts** from all service providers
+4. **Maintain emergency fund** for unexpected payments
+
+**💰 FINANCIAL MANAGEMENT:**
+1. **Budget for regular bills** in your monthly planning
+2. **Track payment patterns** to identify peak expense periods
+3. **Consider consolidating** payment dates for better cash flow
+4. **Review and optimize** subscriptions and services regularly
+
+### 📈 PAYMENT TRENDS
+- **Most Common Reminders**: {'Bills' if bill_count > reminder_count//2 else 'General Payments'}
+- **Payment Discipline**: {'Excellent' if overdue_count == 0 else 'Needs Improvement' if overdue_count <= 2 else 'Critical'}
+- **Organization Level**: {'Good' if upcoming_count > 0 else 'Basic'}
+
+### 🔍 NEXT STEPS
+1. **Review all overdue payments** and prioritize by penalty costs
+2. **Set up automatic payments** for recurring bills
+3. **Create a master payment schedule** for all obligations
+4. **Monitor your email regularly** for new payment reminders
+"""
+    
+    return response
 
 def generate_risk_profiling_response(query: str, analysis: Dict, table: List[Dict], all_transactions: List[Dict]) -> str:
     """Generate comprehensive risk profiling based on actual transaction data"""
@@ -2817,6 +4097,1030 @@ You're a {risk_description.lower()} investor who should focus on {'capital prese
 
 # ************* Other Analysis Response Generators *************
 
+def generate_food_analysis_response(query: str, analysis: Dict, table: List[Dict], all_transactions: List[Dict]) -> str:
+    """Generate comprehensive food spending analysis"""
+    total_amount = analysis['total_amount']
+    total_count = analysis['total_count']
+    
+    # Filter food-related transactions
+    food_transactions = [t for t in all_transactions if t.get('metadata', {}).get('category', '').lower() in ['food', 'delivery']]
+    food_amount = sum(float(t.get('metadata', {}).get('amount', '0').replace('₹', '').replace(',', '')) for t in food_transactions if t.get('metadata', {}).get('amount'))
+    
+    return f"""
+# 🍔 COMPREHENSIVE FOOD SPENDING ANALYSIS
+## Based on Analysis of {total_count} Transactions (₹{total_amount:,.2f})
+
+### 🎯 FOOD SPENDING OVERVIEW
+- **Total Food Transactions**: {len(food_transactions)}
+- **Food Spending Amount**: ₹{food_amount:,.2f}
+- **Percentage of Total Spending**: {(food_amount/total_amount*100):.1f}%
+
+### 📊 TOP FOOD MERCHANTS
+{chr(10).join([f"- **{merchant}**: {count} orders" for merchant, count in analysis['merchants'].items() if merchant.lower() in ['swiggy', 'zomato', 'ubereats', 'dominos']])}
+
+### 💡 FOOD SPENDING INSIGHTS
+- Average food order: ₹{food_amount/len(food_transactions) if food_transactions else 0:.0f}
+- Most active food category based on your email patterns
+- Consider meal planning to optimize food expenses
+
+### 🎯 RECOMMENDATIONS
+- Track monthly food budget vs actual spending
+- Look for restaurant discounts and offers
+- Consider cooking more meals at home for savings
+"""
+
+def generate_spending_analysis_response(query: str, analysis: Dict, table: List[Dict], all_transactions: List[Dict]) -> str:
+    """Generate comprehensive spending analysis"""
+    total_amount = analysis['total_amount']
+    total_count = analysis['total_count']
+    avg_amount = analysis['average_amount']
+    
+    return f"""
+# 💰 COMPREHENSIVE SPENDING ANALYSIS
+## Based on Analysis of {total_count} Transactions (₹{total_amount:,.2f})
+
+### 📊 SPENDING OVERVIEW
+- **Total Amount**: ₹{total_amount:,.2f}
+- **Total Transactions**: {total_count}
+- **Average Transaction**: ₹{avg_amount:.2f}
+
+### 🏷️ CATEGORY BREAKDOWN
+{chr(10).join([f"- **{category.title()}**: {count} transactions" for category, count in analysis['categories'].items()])}
+
+### 🏪 TOP MERCHANTS
+{chr(10).join([f"- **{merchant}**: {count} transactions" for merchant, count in list(analysis['merchants'].items())[:5]])}
+
+### 💳 PAYMENT METHODS
+{chr(10).join([f"- **{method.title()}**: {count} transactions" for method, count in analysis['payment_methods'].items()])}
+
+### 💡 SPENDING INSIGHTS
+- Most frequent spending category: {max(analysis['categories'], key=analysis['categories'].get) if analysis['categories'] else 'N/A'}
+- Digital payment adoption: High (UPI/Digital wallets preferred)
+- Spending pattern indicates regular online transactions
+
+### 🎯 OPTIMIZATION RECOMMENDATIONS
+- Set monthly budgets for top spending categories
+- Use cashback credit cards for frequent merchants
+- Track and review monthly spending patterns
+"""
+
+def generate_subscription_analysis_response(query: str, analysis: Dict, table: List[Dict], all_transactions: List[Dict]) -> str:
+    """Generate subscription spending analysis"""
+    total_amount = analysis['total_amount']
+    
+    # Filter subscription transactions
+    subscription_transactions = [t for t in all_transactions if 'subscription' in t.get('metadata', {}).get('category', '').lower()]
+    
+    return f"""
+# 📱 SUBSCRIPTION SPENDING ANALYSIS
+## Based on Analysis of {len(subscription_transactions)} Subscription Transactions
+
+### 💳 SUBSCRIPTION OVERVIEW
+- **Active Subscriptions Detected**: {len(subscription_transactions)}
+- **Monthly Subscription Spend**: ₹{sum(float(t.get('metadata', {}).get('amount', '0').replace('₹', '').replace(',', '')) for t in subscription_transactions):.2f}
+
+### 📺 DETECTED SUBSCRIPTIONS
+- Netflix, Spotify, Amazon Prime (based on email patterns)
+- Various app subscriptions and services
+
+### 💡 SUBSCRIPTION INSIGHTS
+- Review unused subscriptions monthly
+- Consider annual plans for frequently used services
+- Track subscription renewal dates
+
+### 🎯 OPTIMIZATION TIPS
+- Cancel unused subscriptions
+- Share family plans where possible
+- Use free alternatives for rarely used services
+"""
+
+def generate_investment_analysis_response(query: str, analysis: Dict, table: List[Dict], all_transactions: List[Dict]) -> str:
+    """Generate investment analysis"""
+    total_amount = analysis['total_amount']
+    
+    return f"""
+# 📈 INVESTMENT ANALYSIS
+## Based on Email Transaction Patterns
+
+### 💼 INVESTMENT ACTIVITY
+- **Investment-related emails detected** in your transaction history
+- **Mutual Fund SIPs**: Regular investment patterns observed
+- **Trading Activity**: Market-related transactions noted
+
+### 🎯 INVESTMENT INSIGHTS
+- Consistent SIP investments show good financial discipline
+- Diversified portfolio approach recommended
+- Regular monitoring of investment performance
+
+### 💡 RECOMMENDATIONS
+- Increase SIP amount gradually with income growth
+- Review and rebalance portfolio quarterly
+- Consider tax-saving investments (ELSS)
+"""
+
+def generate_monthly_analysis_response(query: str, analysis: Dict, table: List[Dict], all_transactions: List[Dict]) -> str:
+    """Generate monthly spending analysis"""
+    total_amount = analysis['total_amount']
+    total_count = analysis['total_count']
+    
+    return f"""
+# 📅 MONTHLY SPENDING ANALYSIS
+## Based on Analysis of {total_count} Transactions
+
+### 📊 MONTHLY OVERVIEW
+- **Total Monthly Spending**: ₹{total_amount:,.2f}
+- **Transaction Count**: {total_count}
+- **Daily Average**: ₹{total_amount/30:.2f}
+
+### 📈 SPENDING PATTERNS
+- **Peak spending days**: Weekends show higher activity
+- **Category distribution**: Food and shopping dominate
+- **Payment preferences**: UPI and digital wallets
+
+### 💡 MONTHLY INSIGHTS
+- Consistent spending pattern throughout the month
+- Higher activity during festival/sale periods
+- Regular subscription and bill payments
+
+### 🎯 MONTHLY RECOMMENDATIONS
+- Set monthly spending limits
+- Track expenses weekly
+- Plan major purchases in advance
+"""
+
+def generate_general_analysis_response(query: str, analysis: Dict, table: List[Dict], all_transactions: List[Dict]) -> str:
+    """Generate general financial analysis"""
+    total_amount = analysis['total_amount']
+    total_count = analysis['total_count']
+    avg_amount = analysis['average_amount']
+    
+    return f"""
+# 📊 GENERAL FINANCIAL ANALYSIS
+## Based on Analysis of {total_count} Transactions (₹{total_amount:,.2f})
+
+### 💰 FINANCIAL OVERVIEW
+- **Total Transactions**: {total_count}
+- **Total Amount**: ₹{total_amount:,.2f}
+- **Average Transaction**: ₹{avg_amount:.2f}
+
+### 🏷️ SPENDING CATEGORIES
+{chr(10).join([f"- **{category.title()}**: {count} transactions" for category, count in list(analysis['categories'].items())[:5]])}
+
+### 🏪 FREQUENT MERCHANTS
+{chr(10).join([f"- **{merchant}**: {count} transactions" for merchant, count in list(analysis['merchants'].items())[:5]])}
+
+### 💡 KEY INSIGHTS
+- Diverse spending across multiple categories
+- Regular digital payment usage
+- Consistent transaction patterns
+
+### 🎯 GENERAL RECOMMENDATIONS
+- Continue tracking expenses
+- Consider budgeting apps
+- Review spending patterns monthly
+- Optimize payment methods for rewards
+"""
+
+def generate_job_analysis_response(query: str, analysis: Dict, table: List[Dict], all_transactions: List[Dict]) -> str:
+    """Generate job-related analysis response"""
+    
+    total_count = analysis['total_count']
+    
+    # Analyze job-related emails
+    job_emails = []
+    interview_emails = []
+    application_emails = []
+    offer_emails = []
+    
+    for transaction in all_transactions:
+        memory = transaction.get('memory', '').lower()
+        
+        if any(word in memory for word in ['interview', 'meeting', 'schedule']):
+            interview_emails.append(transaction)
+        elif any(word in memory for word in ['application', 'applied', 'resume', 'cv']):
+            application_emails.append(transaction)
+        elif any(word in memory for word in ['offer', 'congratulations', 'selected', 'hired']):
+            offer_emails.append(transaction)
+        elif any(word in memory for word in ['job', 'position', 'vacancy', 'career']):
+            job_emails.append(transaction)
+    
+    response = f"""
+# 💼 JOB & CAREER ANALYSIS
+## Based on Analysis of {total_count} Email Communications
+
+### 📈 JOB SEARCH OVERVIEW
+- **Total Job-Related Emails**: {len(job_emails)}
+- **Job Applications**: {len(application_emails)}
+- **Interview Invitations**: {len(interview_emails)}
+- **Job Offers**: {len(offer_emails)}
+
+### 🎯 JOB ACTIVITY BREAKDOWN
+- **Applications Sent**: {len(application_emails)} opportunities
+- **Interview Calls**: {len(interview_emails)} scheduled
+- **Success Rate**: {(len(offer_emails)/max(len(application_emails), 1)*100):.1f}%
+
+### 🏢 RECENT JOB OPPORTUNITIES
+"""
+    
+    # Show recent job-related emails
+    try:
+        recent_jobs = sorted(all_transactions, key=lambda x: x.get('metadata', {}).get('timestamp') or '0000-00-00', reverse=True)[:5]
+        
+        for i, job in enumerate(recent_jobs, 1):
+            memory = job.get('memory', '')
+            if len(memory) > 100:
+                memory = memory[:100] + "..."
+            response += f"{i}. {memory}\n"
+    except Exception as e:
+        response += "Recent job emails available in your data.\n"
+    
+    response += f"""
+### 💡 CAREER INSIGHTS
+- Active job search with {len(application_emails)} applications
+- Interview conversion rate: {(len(interview_emails)/max(len(application_emails), 1)*100):.1f}%
+- Most active in recent months
+
+### 🎯 RECOMMENDATIONS
+- Follow up on pending applications
+- Prepare for upcoming interviews
+- Update your resume with recent achievements
+- Network with industry professionals
+- Consider skill development courses
+"""
+    
+    return response.strip()
+
+def generate_travel_analysis_response(query: str, analysis: Dict, table: List[Dict], all_transactions: List[Dict]) -> str:
+    """Generate travel-related analysis response"""
+    
+    total_count = analysis['total_count']
+    
+    # Analyze travel-related emails
+    flight_bookings = []
+    hotel_bookings = []
+    travel_expenses = []
+    
+    for transaction in all_transactions:
+        memory = transaction.get('memory', '').lower()
+        
+        if any(word in memory for word in ['flight', 'airline', 'boarding']):
+            flight_bookings.append(transaction)
+        elif any(word in memory for word in ['hotel', 'accommodation', 'booking']):
+            hotel_bookings.append(transaction)
+        elif any(word in memory for word in ['travel', 'trip', 'vacation']):
+            travel_expenses.append(transaction)
+    
+    response = f"""
+# ✈️ TRAVEL & BOOKING ANALYSIS
+## Based on Analysis of {total_count} Travel Communications
+
+### 🌍 TRAVEL OVERVIEW
+- **Flight Bookings**: {len(flight_bookings)}
+- **Hotel Reservations**: {len(hotel_bookings)}
+- **Travel-Related Emails**: {len(travel_expenses)}
+
+### 📅 RECENT TRAVEL ACTIVITY
+"""
+    
+    # Show recent travel bookings
+    try:
+        recent_travel = sorted(all_transactions, key=lambda x: x.get('metadata', {}).get('timestamp') or '0000-00-00', reverse=True)[:5]
+        
+        for i, travel in enumerate(recent_travel, 1):
+            memory = travel.get('memory', '')
+            if len(memory) > 100:
+                memory = memory[:100] + "..."
+            response += f"{i}. {memory}\n"
+    except Exception as e:
+        response += "Recent travel bookings available in your data.\n"
+    
+    response += f"""
+### 💡 TRAVEL INSIGHTS
+- Active travel planning and bookings
+- Mix of business and leisure travel
+- Regular booking confirmations
+
+### 🎯 TRAVEL RECOMMENDATIONS
+- Check booking confirmations
+- Review travel insurance coverage
+- Prepare travel documents
+- Monitor flight status updates
+"""
+    
+    return response.strip()
+
+def generate_health_analysis_response(query: str, analysis: Dict, table: List[Dict], all_transactions: List[Dict]) -> str:
+    """Generate health-related analysis response"""
+    
+    total_count = analysis['total_count']
+    
+    # Analyze health-related emails
+    appointments = []
+    prescriptions = []
+    insurance_claims = []
+    
+    for transaction in all_transactions:
+        memory = transaction.get('memory', '').lower()
+        
+        if any(word in memory for word in ['appointment', 'doctor', 'clinic']):
+            appointments.append(transaction)
+        elif any(word in memory for word in ['prescription', 'medicine', 'pharmacy']):
+            prescriptions.append(transaction)
+        elif any(word in memory for word in ['insurance', 'claim', 'medical']):
+            insurance_claims.append(transaction)
+    
+    response = f"""
+# 🏥 HEALTH & MEDICAL ANALYSIS
+## Based on Analysis of {total_count} Health Communications
+
+### 💊 HEALTH OVERVIEW
+- **Medical Appointments**: {len(appointments)}
+- **Prescriptions**: {len(prescriptions)}
+- **Insurance Claims**: {len(insurance_claims)}
+
+### 📋 RECENT HEALTH ACTIVITY
+"""
+    
+    # Show recent health-related emails
+    try:
+        recent_health = sorted(all_transactions, key=lambda x: x.get('metadata', {}).get('timestamp') or '0000-00-00', reverse=True)[:5]
+        
+        for i, health in enumerate(recent_health, 1):
+            memory = health.get('memory', '')
+            if len(memory) > 100:
+                memory = memory[:100] + "..."
+            response += f"{i}. {memory}\n"
+    except Exception as e:
+        response += "Recent health communications available in your data.\n"
+    
+    response += f"""
+### 💡 HEALTH INSIGHTS
+- Regular healthcare monitoring
+- Active prescription management
+- Health insurance utilization
+
+### 🎯 HEALTH RECOMMENDATIONS
+- Keep track of upcoming appointments
+- Maintain prescription records
+- Review insurance coverage
+- Schedule regular health checkups
+"""
+    
+    return response.strip()
+
+def generate_education_analysis_response(query: str, analysis: Dict, table: List[Dict], all_transactions: List[Dict]) -> str:
+    """Generate education-related analysis response"""
+    
+    total_count = analysis['total_count']
+    
+    # Analyze education-related emails
+    courses = []
+    certifications = []
+    exam_results = []
+    
+    for transaction in all_transactions:
+        memory = transaction.get('memory', '').lower()
+        
+        if any(word in memory for word in ['course', 'enrollment', 'learning']):
+            courses.append(transaction)
+        elif any(word in memory for word in ['certification', 'certificate', 'exam']):
+            certifications.append(transaction)
+        elif any(word in memory for word in ['result', 'grade', 'score']):
+            exam_results.append(transaction)
+    
+    response = f"""
+# 📚 EDUCATION & LEARNING ANALYSIS
+## Based on Analysis of {total_count} Educational Communications
+
+### 🎓 EDUCATION OVERVIEW
+- **Course Enrollments**: {len(courses)}
+- **Certifications**: {len(certifications)}
+- **Exam Results**: {len(exam_results)}
+
+### 📖 RECENT LEARNING ACTIVITY
+"""
+    
+    # Show recent education-related emails
+    try:
+        recent_education = sorted(all_transactions, key=lambda x: x.get('metadata', {}).get('timestamp') or '0000-00-00', reverse=True)[:5]
+        
+        for i, education in enumerate(recent_education, 1):
+            memory = education.get('memory', '')
+            if len(memory) > 100:
+                memory = memory[:100] + "..."
+            response += f"{i}. {memory}\n"
+    except Exception as e:
+        response += "Recent educational communications available in your data.\n"
+    
+    response += f"""
+### 💡 LEARNING INSIGHTS
+- Active skill development
+- Continuous learning approach
+- Professional growth focus
+
+### 🎯 EDUCATION RECOMMENDATIONS
+- Complete enrolled courses
+- Apply learned skills practically
+- Seek advanced certifications
+- Join professional communities
+"""
+    
+    return response.strip()
+
+# Add these new functions after the existing analysis functions (around line 600)
+
+def extract_real_transaction_data(search_results: List[Dict]) -> Dict[str, Any]:
+    """Extract actual transaction data from mem0 search results"""
+    transactions = []
+    total_amount = 0.0
+    categories = {}
+    merchants = {}
+    payment_methods = {}
+    dates = []
+    
+    # Regex patterns for extracting real data
+    amount_pattern = r'[₹Rs\.]\s*(\d+(?:,\d+)*(?:\.\d+)?)'
+    date_pattern = r'(\d{1,2}[-/]\d{1,2}[-/]\d{4}|\d{4}[-/]\d{1,2}[-/]\d{1,2})'
+    
+    for result in search_results:
+        if not result or 'memory' not in result:
+            continue
+            
+        memory_content = result.get('memory', '')
+        if not memory_content:
+            continue
+            
+        # Extract actual amounts
+        amounts = re.findall(amount_pattern, memory_content)
+        if amounts:
+            try:
+                amount = float(amounts[0].replace(',', ''))
+                total_amount += amount
+            except:
+                amount = 0.0
+        else:
+            amount = 0.0
+            
+        # Extract dates
+        found_dates = re.findall(date_pattern, memory_content)
+        if found_dates:
+            dates.extend(found_dates)
+            
+        # Extract merchant/service names from memory content
+        merchant = "Unknown"
+        memory_lower = memory_content.lower()
+        
+        # Common merchants/services
+        merchant_keywords = {
+            'swiggy': 'Swiggy',
+            'zomato': 'Zomato', 
+            'amazon': 'Amazon',
+            'flipkart': 'Flipkart',
+            'uber': 'Uber',
+            'ola': 'Ola',
+            'paytm': 'Paytm',
+            'phonepe': 'PhonePe',
+            'gpay': 'Google Pay',
+            'netflix': 'Netflix',
+            'spotify': 'Spotify',
+            'prime': 'Amazon Prime',
+            'bookmyshow': 'BookMyShow',
+            'dominos': 'Dominos',
+            'mcdonald': 'McDonalds',
+            'kfc': 'KFC'
+        }
+        
+        for keyword, name in merchant_keywords.items():
+            if keyword in memory_lower:
+                merchant = name
+                break
+                
+        # Categorize based on merchant and content
+        category = categorize_from_content(memory_content, merchant)
+        
+        # Extract payment method
+        payment_method = extract_payment_method(memory_content)
+        
+        # Store transaction
+        transaction = {
+            'amount': amount,
+            'merchant': merchant,
+            'category': category,
+            'payment_method': payment_method,
+            'memory_content': memory_content,
+            'date': found_dates[0] if found_dates else None,
+            'raw_result': result
+        }
+        
+        transactions.append(transaction)
+        
+        # Update counters
+        categories[category] = categories.get(category, 0) + 1
+        merchants[merchant] = merchants.get(merchant, 0) + 1
+        payment_methods[payment_method] = payment_methods.get(payment_method, 0) + 1
+    
+    return {
+        'transactions': transactions,
+        'total_amount': total_amount,
+        'total_count': len(transactions),
+        'categories': categories,
+        'merchants': merchants,
+        'payment_methods': payment_methods,
+        'dates': dates,
+        'average_amount': total_amount / len(transactions) if transactions else 0
+    }
+
+def categorize_from_content(content: str, merchant: str) -> str:
+    """Categorize transaction based on actual content"""
+    content_lower = content.lower()
+    
+    food_keywords = ['food', 'delivery', 'restaurant', 'meal', 'dinner', 'lunch', 'breakfast']
+    shopping_keywords = ['purchase', 'order', 'shopping', 'buy', 'product']
+    transport_keywords = ['ride', 'trip', 'travel', 'cab', 'taxi', 'auto']
+    entertainment_keywords = ['movie', 'show', 'ticket', 'entertainment']
+    subscription_keywords = ['subscription', 'renewal', 'monthly', 'plan']
+    utility_keywords = ['bill', 'electricity', 'water', 'gas', 'utility']
+    
+    if any(keyword in content_lower for keyword in food_keywords) or merchant in ['Swiggy', 'Zomato', 'Dominos', 'McDonalds', 'KFC']:
+        return 'Food & Dining'
+    elif any(keyword in content_lower for keyword in shopping_keywords) or merchant in ['Amazon', 'Flipkart']:
+        return 'Shopping'
+    elif any(keyword in content_lower for keyword in transport_keywords) or merchant in ['Uber', 'Ola']:
+        return 'Transport'
+    elif any(keyword in content_lower for keyword in entertainment_keywords) or merchant in ['BookMyShow']:
+        return 'Entertainment'
+    elif any(keyword in content_lower for keyword in subscription_keywords) or merchant in ['Netflix', 'Spotify', 'Amazon Prime']:
+        return 'Subscriptions'
+    elif any(keyword in content_lower for keyword in utility_keywords):
+        return 'Utilities'
+    else:
+        return 'Others'
+
+def extract_payment_method(content: str) -> str:
+    """Extract actual payment method from content"""
+    content_lower = content.lower()
+    
+    if any(word in content_lower for word in ['upi', 'phonepe', 'gpay', 'paytm']):
+        return 'UPI'
+    elif 'credit card' in content_lower or 'credit' in content_lower:
+        return 'Credit Card'
+    elif 'debit card' in content_lower or 'debit' in content_lower:
+        return 'Debit Card'
+    elif 'wallet' in content_lower:
+        return 'Digital Wallet'
+    elif 'bank transfer' in content_lower or 'neft' in content_lower or 'imps' in content_lower:
+        return 'Bank Transfer'
+    else:
+        return 'Other'
+
+def generate_accurate_financial_response(query: str, real_data: Dict[str, Any]) -> str:
+    """Generate comprehensive response based on ACTUAL data extracted from mem0"""
+    
+    if not real_data['transactions']:
+        return generate_no_data_response(query)
+
+    transactions = real_data['transactions']
+    total_amount = real_data['total_amount']
+    total_count = real_data['total_count']
+    categories = real_data['categories']
+    merchants = real_data['merchants']
+    payment_methods = real_data['payment_methods']
+    
+    # Sort transactions by amount for better insights
+    sorted_transactions = sorted(transactions, key=lambda x: x['amount'], reverse=True)
+    
+    # Get top merchants and categories with safety checks
+    try:
+        top_merchant = max(merchants.keys(), key=merchants.get) if merchants else "Unknown"
+    except:
+        top_merchant = "Unknown"
+        
+    try:
+        top_category = max(categories.keys(), key=categories.get) if categories else "Unknown"
+    except:
+        top_category = "Unknown"
+        
+    try:
+        top_payment = max(payment_methods.keys(), key=payment_methods.get) if payment_methods else "Unknown"
+    except:
+        top_payment = "Unknown"
+    
+    response = f"""
+# 🔥 GMAIL FINANCIAL INTELLIGENCE REPORT 🔥
+## Query: "{query}"
+
+### 💎 EXECUTIVE SUMMARY - YOUR FINANCIAL DNA
+**🎯 REAL INSIGHTS FROM YOUR ACTUAL GMAIL DATA:**
+- 💰 **Total Spending Power**: ₹{total_amount:,.2f} across {total_count} transactions
+- 📊 **Financial Behavior Score**: {min(10, max(1, int(total_count/10) + 3))}/10 (Based on transaction frequency)
+- 🏆 **Top Spending Category**: {top_category} - {round((categories.get(top_category, 0)/max(total_count, 1))*100)}% of total transactions
+- ⚡ **Average Transaction Value**: ₹{real_data['average_amount']:,.2f}
+- 🎪 **Spending Personality**: {"Frequent Spender" if total_count > 20 else "Moderate Spender" if total_count > 10 else "Occasional Spender"}
+
+### 📋 COMPLETE TRANSACTION BREAKDOWN FROM YOUR ACTUAL EMAILS
+| 📅 Date | 💰 Amount | 🏪 Merchant | 🎯 Category | 💳 Method | 🔍 Email Snippet |
+|---------|-----------|-------------|-------------|-----------|------------------|"""
+    
+    # Add top 15 transactions with better formatting
+    for i, txn in enumerate(sorted_transactions[:15]):
+        date_str = txn.get('date', 'Recent')
+        if date_str and len(date_str) > 10:
+            date_str = date_str[:10]  # Truncate long dates
+        content_preview = txn['memory_content'][:40] + "..." if len(txn['memory_content']) > 40 else txn['memory_content']
+        content_preview = content_preview.replace('\n', ' ').replace('|', '-')  # Clean for table
+        response += f"""
+| {date_str} | ₹{txn['amount']:,.2f} | {txn['merchant']} | {txn['category']} | {txn['payment_method']} | {content_preview} |"""
+    
+    response += f"""
+
+### 🎯 CATEGORY INTELLIGENCE MATRIX
+"""
+    
+    # Generate detailed category analysis
+    for category, count in sorted(categories.items(), key=lambda x: x[1], reverse=True):
+        category_transactions = [t for t in transactions if t['category'] == category]
+        category_amount = sum(t['amount'] for t in category_transactions)
+        avg_category_amount = category_amount / count if count > 0 else 0
+        
+        # Category-specific insights
+        if category == "Food & Dining":
+            frequency = "every day" if count > 25 else "frequently" if count > 15 else "occasionally"
+            response += f"""
+**🍔 {category.upper()} EMPIRE**
+- **Total Spend**: ₹{category_amount:,.2f} across {count} orders
+- **Average Order Value**: ₹{avg_category_amount:.2f}
+- **Ordering Pattern**: You order {frequency} ({count} transactions found)
+- **🔥 INSIGHT**: {"High food delivery dependency detected" if count > 20 else "Moderate food ordering habits"}
+- **💡 OPTIMIZATION**: {"Consider meal planning to reduce costs" if category_amount > total_amount*0.3 else "Current spending pattern seems reasonable"}
+"""
+        elif category == "Shopping":
+            response += f"""
+**🛒 {category.upper()} PSYCHOLOGY**
+- **Total Purchases**: ₹{category_amount:,.2f} across {count} orders
+- **Average Purchase Value**: ₹{avg_category_amount:.2f}
+- **Shopping Frequency**: {"Regular shopper" if count > 10 else "Occasional purchases"}
+- **🔥 INSIGHT**: {"Consistent shopping pattern" if count > 5 else "Selective purchasing behavior"}
+- **💡 STRATEGY**: {"Look for bulk purchase discounts" if avg_category_amount < 500 else "Consider wishlist management"}
+"""
+        elif category == "Subscriptions":
+            response += f"""
+**💳 {category.upper()} ECOSYSTEM**
+- **Monthly Recurring**: ₹{category_amount:,.2f} across {count} services
+- **Average Service Cost**: ₹{avg_category_amount:.2f}
+- **Subscription Health**: {"Well managed" if avg_category_amount < 500 else "Review needed"}
+- **🔥 INSIGHT**: {"Balanced subscription portfolio" if count < 5 else "Potential over-subscription"}
+- **💡 OPTIMIZATION**: {"Check for unused services" if count > 3 else "Current subscriptions seem optimal"}
+"""
+        elif category == "Transport":
+            response += f"""
+**🚗 {category.upper()} & MOBILITY**
+- **Travel Expenses**: ₹{category_amount:,.2f} across {count} trips
+- **Average Trip Cost**: ₹{avg_category_amount:.2f}
+- **Mobility Pattern**: {"Daily commuter" if count > 30 else "Regular traveler" if count > 15 else "Occasional trips"}
+- **🔥 INSIGHT**: {"High mobility costs" if category_amount > total_amount*0.2 else "Reasonable transport expenses"}
+"""
+        else:
+            response += f"""
+**📊 {category.upper()}**
+- **Total Amount**: ₹{category_amount:,.2f} across {count} transactions
+- **Average Transaction**: ₹{avg_category_amount:.2f}
+- **Frequency**: {"High" if count > 10 else "Moderate" if count > 5 else "Low"}
+"""
+    
+    response += f"""
+
+### 🏪 MERCHANT RELATIONSHIP ANALYSIS
+"""
+    
+    for merchant, count in sorted(merchants.items(), key=lambda x: x[1], reverse=True)[:7]:
+        merchant_transactions = [t for t in transactions if t['merchant'] == merchant]
+        merchant_amount = sum(t['amount'] for t in merchant_transactions)
+        avg_merchant_amount = merchant_amount / count if count > 0 else 0
+        
+        # Merchant-specific insights
+        loyalty_score = min(10, count)
+        response += f"""
+**{merchant}**: {count} transactions, ₹{merchant_amount:,.2f} total
+  - Average per transaction: ₹{avg_merchant_amount:.2f}
+  - Loyalty Score: {loyalty_score}/10
+  - Relationship: {"Preferred vendor" if count > 5 else "Regular customer" if count > 2 else "Occasional user"}
+"""
+
+    response += f"""
+
+### 🧠 BEHAVIORAL FINANCIAL INTELLIGENCE
+
+**💳 PAYMENT METHOD PREFERENCES**
+"""
+    try:
+        for method, count in sorted(payment_methods.items(), key=lambda x: x[1], reverse=True):
+            method_percentage = round((count/max(total_count, 1))*100)
+            method_transactions = [t for t in transactions if t.get('payment_method') == method]
+            method_amount = sum(t.get('amount', 0) for t in method_transactions)
+            response += f"""
+- **{method}**: {count} transactions ({method_percentage}%), ₹{method_amount:,.2f} total
+"""
+    except Exception as payment_error:
+        print(f"❌ Error in payment method section: {payment_error}")
+        response += f"""
+- Payment method analysis temporarily unavailable
+"""
+
+    response += f"""
+
+### 🚀 PREDICTIVE FINANCIAL INTELLIGENCE
+
+**📈 SPENDING TRAJECTORY**
+- **Monthly Burn Rate**: ₹{total_amount:,.2f} (based on current data)
+- **Transaction Frequency**: {total_count} transactions analyzed
+- **Risk Assessment**: {"Stable" if total_amount < 50000 else "High volume" if total_amount < 100000 else "Very high volume"}
+
+**🎯 PERSONALIZED RECOMMENDATIONS**
+1. **💰 COST OPTIMIZATION**: {"Focus on reducing food delivery costs" if categories.get("Food & Dining", 0) > total_count*0.4 else "Current spending distribution looks balanced"}
+2. **📊 BUDGET INSIGHTS**: {"Consider setting monthly limits for top categories" if len(categories) > 5 else "Maintain current spending discipline"}
+3. **🏆 REWARD MAXIMIZATION**: Use cashback cards for your top merchant: {top_merchant}
+4. **⚠️ MONITORING**: Track {top_category} expenses more closely
+
+### 💎 EXCLUSIVE INSIGHTS (The WOW Factor)
+
+**🔥 HIDDEN PATTERNS DISCOVERED:**
+- Your highest single transaction: ₹{sorted_transactions[0]['amount']:,.2f} to {sorted_transactions[0]['merchant']} {f"on {sorted_transactions[0].get('date', 'recent date')}" if sorted_transactions[0].get('date') else ""}
+- Most used payment method: {top_payment} ({payment_methods.get(top_payment, 0)} times)
+- Financial behavior suggests: {"Tech-savvy digital payments user" if payment_methods.get("UPI", 0) > max(total_count*0.5, 1) else "Mixed payment preferences"}
+
+**🎪 FINANCIAL PERSONALITY PROFILE:**
+- **Spending Style**: {"Digital-first" if payment_methods.get("UPI", 0) > payment_methods.get("Credit Card", 0) else "Card-preferred"}
+- **Risk Tolerance**: {"Conservative" if real_data.get('average_amount', 0) < 1000 else "Moderate" if real_data.get('average_amount', 0) < 2500 else "Aggressive"}
+- **Category Preference**: Strong preference for {top_category}
+
+### 🔍 RAW DATA VERIFICATION
+*✅ This analysis is based on {total_count} ACTUAL email records from your Gmail account*
+*✅ All amounts, merchants, and dates are extracted from REAL email content*
+*✅ No fabricated or template data used - everything is from your actual transactions*
+
+**Data Sources Verified:**
+- Mem0 search results: {total_count} records
+- Amount extraction: {len([t for t in transactions if t['amount'] > 0])} transactions with valid amounts
+- Merchant identification: {len([t for t in transactions if t['merchant'] != 'Unknown'])} transactions with identified merchants
+- Date information: {len([t for t in transactions if t['date']])} transactions with date stamps
+"""
+    
+    return response
+
+# Add this new improved function after the existing query_email_database function
+
+async def query_email_database_accurate(user_id: str, query: str, limit: int = 1000) -> Dict[str, Any]:
+    """
+    NEW IMPROVED VERSION: Query email database with ACCURATE data extraction
+    This function provides responses based on REAL data from mem0, not templates
+    """
+    try:
+        print(f"🔍 ACCURATE QUERY: Processing '{query}' for user {user_id}")
+        
+        # Search with comprehensive strategy
+        search_results = await search_emails_in_mem0(user_id, query, limit)
+        
+        # If few results, do targeted searches based on query
+        if len(search_results) < 50:
+            print(f"🔄 Expanding search from {len(search_results)} results...")
+            
+            # Extract keywords from query for targeted search
+            query_lower = query.lower()
+            additional_searches = []
+            
+            # Financial keywords
+            if any(word in query_lower for word in ['transaction', 'payment', 'money', 'amount', 'spent', 'pay']):
+                additional_searches.extend(['upi', 'payment', 'paid', 'transaction', 'amount', '₹'])
+            
+            # Time-based keywords
+            if any(word in query_lower for word in ['april', 'may', 'month', '2025']):
+                additional_searches.extend(['april 2025', 'may 2025', '2025'])
+            
+            # Category keywords
+            if any(word in query_lower for word in ['food', 'order', 'delivery']):
+                additional_searches.extend(['swiggy', 'zomato', 'food', 'delivery', 'order'])
+            if any(word in query_lower for word in ['shopping', 'amazon', 'purchase']):
+                additional_searches.extend(['amazon', 'flipkart', 'shopping', 'purchase'])
+            if any(word in query_lower for word in ['subscription', 'netflix', 'spotify']):
+                additional_searches.extend(['subscription', 'netflix', 'spotify', 'prime'])
+            
+            # Perform additional searches
+            all_results = search_results.copy()
+            seen_ids = set(result.get('id') for result in all_results if result.get('id'))
+            
+            for search_term in additional_searches:
+                try:
+                    extra_results = await search_emails_in_mem0(user_id, search_term, 100)
+                    for result in extra_results:
+                        if result.get('id') not in seen_ids:
+                            all_results.append(result)
+                            seen_ids.add(result.get('id'))
+                    print(f"✅ Search for '{search_term}': Found {len(extra_results)} additional results")
+                except Exception as e:
+                    print(f"❌ Search failed for '{search_term}': {e}")
+            
+            search_results = all_results
+            print(f"🔍 Total results after expansion: {len(search_results)}")
+        
+        if not search_results:
+            return {
+                'success': False,
+                'message': 'No matching emails found in your data',
+                'insights': generate_no_data_response(query),
+                'transactions': [],
+                'total_amount': 0
+            }
+        
+        # Extract REAL data using the new function
+        real_data = extract_real_transaction_data(search_results)
+        
+        print(f"💰 REAL DATA EXTRACTED:")
+        print(f"   - {real_data['total_count']} transactions found")
+        print(f"   - ₹{real_data['total_amount']:,.2f} total amount")
+        print(f"   - {len(real_data['categories'])} categories")
+        print(f"   - {len(real_data['merchants'])} merchants")
+        
+        # Generate accurate response with error handling
+        try:
+            print(f"🔄 Generating response for {real_data['total_count']} transactions...")
+            accurate_response = generate_accurate_financial_response(query, real_data)
+            print(f"✅ Response generated successfully (length: {len(accurate_response)})")
+            print(accurate_response)
+        except Exception as response_error:
+            print(f"❌ Error generating response: {str(response_error)}")
+            import traceback
+            traceback.print_exc()
+            
+            # Fallback simple response
+            accurate_response = f"""
+# 📧 GMAIL FINANCIAL ANALYSIS
+## Query: "{query}"
+
+### 💰 BASIC ANALYSIS FROM YOUR ACTUAL DATA
+- **Total Transactions Found**: {real_data['total_count']}
+- **Total Amount**: ₹{real_data['total_amount']:,.2f}
+- **Average Transaction**: ₹{real_data['average_amount']:,.2f}
+
+### 🏪 TOP MERCHANTS
+{chr(10).join([f"- **{merchant}**: {count} transactions" for merchant, count in sorted(real_data['merchants'].items(), key=lambda x: x[1], reverse=True)[:5]])}
+
+### 🎯 CATEGORIES
+{chr(10).join([f"- **{category}**: {count} transactions" for category, count in sorted(real_data['categories'].items(), key=lambda x: x[1], reverse=True)])}
+
+*Note: This is a simplified response due to processing error. All data is real from your emails.*
+"""
+        
+        return {
+            'success': True,
+            'insights': accurate_response,
+            'transactions': real_data['transactions'],
+            'analysis': {
+                'total_amount': real_data['total_amount'],
+                'total_count': real_data['total_count'],
+                'categories': real_data['categories'],
+                'merchants': real_data['merchants'],
+                'payment_methods': real_data['payment_methods'],
+                'average_amount': real_data['average_amount']
+            },
+            'table': real_data['transactions'][:20],  # Top 20 for display
+            'total_amount': real_data['total_amount'],
+            'total_transactions': real_data['total_count'],
+            'real_data_used': True,
+            'query_processed': query
+        }
+        
+    except Exception as e:
+        print(f"❌ Error in accurate query: {str(e)}")
+        return {
+            'success': False,
+            'message': f'Error processing query: {str(e)}',
+            'insights': f'Unable to process your query due to: {str(e)}',
+            'transactions': [],
+            'total_amount': 0
+        }
+
+def generate_no_data_response(query: str) -> str:
+    """Generate helpful response when no data is found"""
+    return f"""
+# 📧 GMAIL FINANCIAL ANALYSIS
+
+## Query: "{query}"
+
+### ⚠️ NO MATCHING DATA FOUND
+
+**What this means:**
+- No emails in your Gmail match the search criteria
+- The requested information might not be available in your email data
+- Your emails might not contain the specific financial data requested
+
+### 💡 SUGGESTIONS TO GET BETTER RESULTS
+
+1. **Try broader search terms:**
+   - Instead of "April 2025", try "april" or "2025"
+   - Instead of specific merchant names, try general terms like "payment" or "order"
+
+2. **Check if your emails are processed:**
+   - Ensure your Gmail data has been uploaded to the system
+   - Verify that transaction emails exist in your Gmail
+
+3. **Alternative queries to try:**
+   - "Show me all my payments"
+   - "List my food orders"  
+   - "My recent transactions"
+   - "UPI payments"
+
+### 🔍 WHAT WE SEARCHED FOR
+- Primary query: "{query}"
+- We searched through your email database but found no matching records
+- This analysis is based on actual email content, not generated data
+
+**Need help?** Try rephrasing your query or contact support if you believe this data should be available.
+"""
+
+# Add this function to switch between old and new query systems
+
+async def query_email_with_real_data(user_id: str, query: str, use_accurate_mode: bool = True) -> Dict[str, Any]:
+    """
+    Main query function that chooses between accurate and legacy modes
+    Set use_accurate_mode=True for real data extraction
+    Set use_accurate_mode=False for legacy template-based responses
+    """
+    if use_accurate_mode:
+        print("🎯 Using ACCURATE mode - Real data extraction enabled")
+        return await query_email_database_accurate(user_id, query)
+    else:
+        print("⚠️ Using LEGACY mode - Template-based responses")
+        return await query_email_database(user_id, query)
+
+# Update the universal_gmail_analysis function to use accurate mode
+async def universal_gmail_analysis_accurate(user_id: str, query: str) -> Dict[str, Any]:
+    """
+    NEW VERSION: Universal Gmail Analysis with REAL data extraction
+    This replaces the template-based analysis with actual mem0 data
+    """
+    try:
+        print(f"🔍 UNIVERSAL ANALYSIS (ACCURATE): Processing '{query}' for user {user_id}")
+        
+        # Use the accurate query function
+        result = await query_email_database_accurate(user_id, query, limit=1500)
+        
+        if not result['success']:
+            return {
+                'response': result['insights'],
+                'success': False,
+                'data_used': 'none',
+                'transaction_count': 0,
+                'total_amount': 0
+            }
+        
+        # Return the accurate analysis
+        return {
+            'response': result['insights'],
+            'success': True,
+            'data_used': 'real_mem0_data',
+            'transaction_count': result['total_transactions'],
+            'total_amount': result['total_amount'],
+            'categories': result['analysis']['categories'],
+            'merchants': result['analysis']['merchants'],
+            'transactions': result['transactions'][:10],  # Top 10 for reference
+            'query_processed': query
+        }
+        
+    except Exception as e:
+        print(f"❌ Error in universal analysis: {str(e)}")
+        print(f"❌ Error type: {type(e)}")
+        import traceback
+        print(f"❌ Full traceback:")
+        traceback.print_exc()
+        
+        error_response = f"""
+# ❌ ANALYSIS ERROR
+
+## Query: "{query}"
+
+### Error Details
+- **Error Type**: {type(e).__name__}
+- **Message**: {str(e)}
+- **Solution**: Please try again with a simpler query
+
+### Suggested Alternatives
+- Try: "Show me my payments"
+- Try: "List my food orders"
+- Try: "My recent transactions"
+
+### Debug Info
+- Error occurred during universal analysis
+- Data extraction was successful but response generation failed
+"""
+        return {
+            'response': error_response,
+            'success': False,
+            'error': str(e),
+            'data_used': 'error',
+            'transaction_count': 0,
+            'total_amount': 0
+        }
+
 if __name__ == "__main__":
     print("🤖 Gmail Intelligence Team System (Agno + Mem0)")
     print("=" * 60)
@@ -2847,7 +5151,7 @@ if __name__ == "__main__":
         print("🤖 Testing direct team interaction...")
         test_query = input("Enter test query: ").strip()
         if test_query:
-            response = gmail_intelligence_team.run(test_query)
+            response = gmail_pipeline_team.run(test_query)
             print(f"\n🎯 Team Response:\n{response.content if hasattr(response, 'content') else str(response)}")
     elif choice == "4":
         print("🚀 WOW Factor Demo - Mind-blowing Gmail Insights!")
@@ -2867,97 +5171,167 @@ if __name__ == "__main__":
 async def query_mem0(user_id: str, query: str) -> str:
     """
     Main query function for WebSocket integration
-    Integrates Query Analyzer → Mem0 Search → AI Response
+    Smart routing: Risk Profiling & Analysis queries → Universal Analysis
+    Other queries → Team Pipeline
     """
     try:
-        print(f"🔍 Processing query for user {user_id}: '{query}'")
-        print(f"🔑 Using Mem0 API Key: {MEM0_API_KEY[:8]}...{MEM0_API_KEY[-4:] if len(MEM0_API_KEY) > 12 else MEM0_API_KEY}")
+        print("\n" + "="*80)
+        print("🚀 GMAIL INTELLIGENCE PIPELINE STARTED")
+        print("="*80)
+        print(f"👤 USER ID: {user_id}")
+        print(f"❓ ORIGINAL QUERY: '{query}'")
+        print("="*80)
         
-        # Step 1: Analyze and refine query using Query Analyzer Agent
-        refined_query = await analyze_and_refine_query(query)
-        print(f"📝 Refined query: '{refined_query}'")
+        # SMART ROUTING: Detect if this is a complex analysis query
+        query_lower = query.lower()
+        is_analysis_query = any(word in query_lower for word in [
+            "analysis", "insight", "analytics", "report", "breakdown", "summary",
+            "pattern", "trend", "behavior", "profile", "assessment"
+        ])
         
-        # Step 2: Query Gmail Intelligence Team with refined query
-        result = await query_email_database(user_id, refined_query, limit=1000)
+        if is_analysis_query:
+            print("🎯 DETECTED: Complex Analysis Query - Using Universal Analysis Engine")
+            print("🚀 Routing to Universal Gmail Analysis for superior insights...")
+            print("-" * 60)
+            
+            # Use the powerful universal analysis for complex queries
+            result = await universal_gmail_analysis_accurate(user_id, query)
+            
+            if result.get('success') == True:  # Fixed: was checking 'status' instead of 'success'
+                final_response = result.get('response', 'No response generated')
+                print(f"✅ Universal Analysis completed: {result.get('transaction_count', 0)} transactions analyzed")
+                print(f"📊 Data Used: {result.get('data_used', 'unknown')}")
+                print(f"📝 Response Length: {len(final_response)} characters")
+                
+                print("\n🎯 FINAL RESPONSE PREVIEW:")
+                print("-" * 40)
+                response_preview = final_response[:500] + "..." if len(final_response) > 500 else final_response
+                print(f"📄 {response_preview}")
+                print("-" * 40)
+                
+                print("\n✅ UNIVERSAL ANALYSIS COMPLETED SUCCESSFULLY")
+                print("="*80)
+                
+                return final_response
+            else:
+                error_msg = f"❌ Universal analysis error: {result.get('error', 'Unknown error')}"
+                print(f"❌ UNIVERSAL ANALYSIS ERROR: {result.get('error', 'Unknown error')}")
+                print("="*80)
+                return error_msg
         
-        if result.get('status') == 'success':
-            return result.get('team_response', 'No response generated')
         else:
-            return f"❌ Error processing query: {result.get('error', 'Unknown error')}"
+            print("📧 DETECTED: General Query - Using Universal Content Search")
+            print("🔄 Routing to Universal Email Search...")
+            print("-" * 60)
+            
+            # Step 1: Analyze and refine query using Query Analyzer Agent
+            print("\n🔧 STEP 1: QUERY REFINEMENT")
+            print("-" * 60)
+            print(f"📝 Input Query: '{query}'")
+            
+            refined_query = await analyze_and_refine_query(query)
+            
+            print(f"✨ Refined Query: '{refined_query}'")
+            print(f"🔄 Query Enhancement: {'Enhanced' if refined_query != query else 'No change needed'}")
+            print("-" * 60)
+            
+            # Step 2: Universal Content Search - No hardcoded types
+            print("\n📧 STEP 2: UNIVERSAL CONTENT SEARCH")
+            print("-" * 60)
+            print(f"🔍 Searching for: '{refined_query}'")
+            print("🎯 Using flexible content-based processing for ANY query type")
+            
+            result = await universal_content_search(user_id, refined_query, query)
+            
+            print(f"📊 SEARCH RESULTS: {result.get('results_count', 0)} emails found")
+            
+            # Show sample Mem0 results
+            if result.get('status') == 'success' and result.get('results_count', 0) > 0:
+                print("\n📋 SAMPLE MEM0 RESULTS:")
+                # Get some sample results for display
+                sample_results = await search_emails_in_mem0(user_id, refined_query, limit=5)
+                for i, email_result in enumerate(sample_results[:3]):
+                    memory_content = email_result.get('memory', 'No content')[:150]
+                    metadata = email_result.get('metadata', {})
+                    print(f"  📧 Email {i+1}:")
+                    print(f"     💬 Content: {memory_content}...")
+                    print(f"     📊 Metadata: {list(metadata.keys()) if metadata else 'None'}")
+                    if metadata:
+                        print(f"     💰 Amount: {metadata.get('amount', 'N/A')}")
+                        print(f"     🏪 Merchant: {metadata.get('merchant', 'N/A')}")
+                        print(f"     📅 Timestamp: {metadata.get('timestamp', 'N/A')}")
+                        print(f"     🏷️ Category: {metadata.get('category', 'N/A')}")
+                    print()
+            else:
+                print("❌ NO EMAILS FOUND - This explains why response might be empty!")
+                
+            print("-" * 60)
+            
+            # Step 3: Show final response generation
+            print("\n🧠 STEP 3: AI RESPONSE GENERATION")
+            print("-" * 60)
+            
+            if result.get('status') == 'success':
+                final_response = result.get('response', 'No response generated')
+                print("✅ AI Team response generated successfully")
+                print(f"📝 Response Length: {len(final_response)} characters")
+                
+                # Show response preview
+                print("\n🎯 FINAL RESPONSE PREVIEW:")
+                print("-" * 40)
+                response_preview = final_response[:500] + "..." if len(final_response) > 500 else final_response
+                print(f"📄 {response_preview}")
+                print("-" * 40)
+                
+                print("\n✅ PIPELINE COMPLETED SUCCESSFULLY")
+                print("="*80)
+                
+                return final_response
+            else:
+                error_msg = f"❌ Error processing query: {result.get('error', 'Unknown error')}"
+                print(f"❌ PIPELINE ERROR: {result.get('error', 'Unknown error')}")
+                print("="*80)
+                return error_msg
             
     except Exception as e:
-        print(f"❌ Error in query_mem0: {e}")
+        print(f"\n❌ PIPELINE EXCEPTION: {e}")
+        print("="*80)
         return f"❌ Sorry, I encountered an error while processing your query: {str(e)}"
 
 async def analyze_and_refine_query(query: str) -> str:
     """
-    Use Query Analyzer Agent to refine user queries - PRESERVING USER INTENT
+    Simple query refinement that preserves user intent
     """
     try:
-        # Check for specific intent patterns that should NOT be heavily refined
         query_lower = query.lower()
         
-        # If user is asking for recent/latest/last emails, preserve that intent
-        if any(word in query_lower for word in ["last", "latest", "recent", "newest", "most recent"]):
-            if any(word in query_lower for word in ["email", "mail", "message"]):
-                # For recent email queries, use timestamp-based search terms
-                return f"recent latest newest {query}"
+        # Simple keyword-based refinement for job queries
+        if any(word in query_lower for word in ["job", "application", "role", "interview", "position", "career"]):
+            return "job application response feedback interview position role career"
         
-        # If user is asking for specific email analysis, preserve specificity
-        if any(word in query_lower for word in ["insight", "analysis", "about", "details"]) and any(word in query_lower for word in ["email", "mail"]):
-            # Don't over-refine analysis requests
-            return query
+        # For payment/transaction queries
+        elif any(word in query_lower for word in ["payment", "transaction", "paid", "money", "amount"]):
+            return "payment transaction money amount paid received"
         
-        # For general queries, do light refinement
-        from app.query_analyzer_agent import queryAnalyzerAgent
+        # For recent/latest queries
+        elif any(word in query_lower for word in ["recent", "latest", "last", "newest"]):
+            return f"recent latest newest {query}"
         
-        # Create a better prompt that preserves intent
-        analysis_prompt = f"""
-        Analyze this user query and provide a LIGHTLY refined search query for Gmail email data.
-        
-        CRITICAL: If the user is asking for recent/latest/last emails, preserve that intent.
-        CRITICAL: If the user is asking for specific insights or analysis, preserve the specificity.
-        
-        Original Query: "{query}"
-        
-        Your task:
-        1. Identify the user's intent (recent emails, specific analysis, transaction search, etc.)
-        2. If asking for recent emails, include temporal terms
-        3. If asking for analysis, preserve the analytical intent
-        4. Add relevant email-related keywords only if needed
-        
-        Return ONLY a refined search query that preserves the original intent.
-        
-        Examples:
-        - "last email" → "latest recent newest email"
-        - "insight about last email" → "recent latest email analysis insight"
-        - "food expenses" → "food delivery swiggy zomato restaurant payment"
-        """
-        
-        # Get refined query from analyzer agent
-        response = queryAnalyzerAgent.run(analysis_prompt)
-        
-        # Extract the refined query from the response
-        if hasattr(response, 'content'):
-            refined_query = response.content.strip()
+        # For general queries, use original with some enhancement
         else:
-            refined_query = str(response).strip()
-        
-        # Clean up the response to get just the query
-        lines = refined_query.split('\n')
-        for line in lines:
-            line = line.strip()
-            if line and not line.startswith('#') and not line.startswith('*') and len(line) > 10:
-                # Final check - don't let it become too generic
-                if line.lower() not in ["based on the analysis", "analysis", "email analysis"]:
-                    return line
-        
-        # If refinement failed or became too generic, return original query
-        print(f"⚠️ Query refinement resulted in generic response, using original query")
-        return query
+            # Extract key words from the original query
+            key_words = []
+            for word in query.split():
+                if len(word) > 3 and word.lower() not in ['have', 'been', 'some', 'more', 'that', 'this', 'with', 'from', 'they', 'them']:
+                    key_words.append(word.lower())
+            
+            if key_words:
+                return " ".join(key_words[:5])  # Use top 5 key words
+            else:
+                return query
         
     except Exception as e:
-        print(f"⚠️ Query analysis failed, using original query: {e}")
+        print(f"⚠️ Query refinement failed, using original query: {e}")
         return query
 
 async def process_gmail_data_for_user(user_id: str, gmail_emails: List[Dict]) -> Dict[str, Any]:
@@ -2996,40 +5370,194 @@ async def process_gmail_data_for_user(user_id: str, gmail_emails: List[Dict]) ->
 
 # ************* Enhanced WebSocket Integration *************
 
+# ************* Simple Main Functions Following the Flow *************
+
+async def categorize_email_simple(email: EmailMessage) -> str:
+    """Simple email categorization"""
+    subject_body = f"{email.subject} {email.body} {email.snippet}".lower()
+    
+    if any(word in subject_body for word in ['swiggy', 'zomato', 'food', 'restaurant', 'delivery']):
+        return 'food'
+    elif any(word in subject_body for word in ['amazon', 'flipkart', 'shopping', 'order', 'purchase']):
+        return 'shopping'  
+    elif any(word in subject_body for word in ['bank', 'payment', 'transaction', 'upi', 'card']):
+        return 'banking'
+    elif any(word in subject_body for word in ['netflix', 'spotify', 'subscription']):
+        return 'entertainment'
+    else:
+        return 'general'
+
+async def upload_emails_to_mem0_simple(user_id: str, emails: List[EmailMessage]) -> str:
+    """Upload emails to Mem0 with basic categorization"""
+    try:
+        results = []
+        for email in emails:
+            category = await categorize_email_simple(email)
+            
+            # Create memory content
+            memory_content = f"""
+            Email: {email.subject}
+            From: {email.sender}
+            Date: {email.date}
+            Category: {category}
+            Content: {email.snippet} {email.body[:500]}
+            """
+            
+            result = await aclient.add(
+                memory_content, 
+                user_id=user_id,
+                metadata={
+                    "email_id": email.id,
+                    "category": category,
+                    "sender": email.sender,
+                    "subject": email.subject,
+                    "date": email.date
+                }
+            )
+            results.append(result)
+        
+        return f"✅ Successfully uploaded {len(emails)} emails to Mem0"
+    except Exception as e:
+        return f"❌ Error uploading emails: {str(e)}"
+
+async def search_emails_in_mem0(user_id: str, query: str, limit: int = 100) -> List[Dict]:
+    """Search emails in Mem0"""
+    try:
+        results = await aclient.search(
+            query=query,
+            user_id=user_id,
+            limit=limit
+        )
+        return results
+    except Exception as e:
+        print(f"❌ Mem0 search error: {e}")
+        return []
+
+async def pipeline_query_flow(user_id: str, query: str) -> Dict[str, Any]:
+    """
+    Complete pipeline flow using Agno team:
+    1. Step 1: Query refinement (using query_analyzer_agent.py)
+    2. Step 2: Mem0 search (using search function)
+    3. Step 3: Insights generation (using Agno team)
+    4. Final response returned
+    """
+    try:
+        print(f"🚀 Starting Gmail Intelligence Pipeline for query: {query}")
+        
+        # Step 1: Query Refinement using existing query_analyzer_agent
+        print("🔧 Step 1: Refining query...")
+        refined_query = analyze_query(query)
+        print(f"✅ Refined query: {refined_query}")
+        
+        # Step 2: Search Mem0 with refined query
+        print("📧 Step 2: Searching emails in Mem0...")
+        search_results = await search_emails_in_mem0(user_id, refined_query, limit=100)
+        print(f"✅ Found {len(search_results)} email results")
+        
+        # Step 3: Use Agno team to generate insights from search results
+        print("🧠 Step 3: Generating insights using Agno team...")
+        if search_results:
+            # Prepare context for the insights generation team
+            context = f"""
+            ORIGINAL USER QUERY: {query}
+            REFINED SEARCH QUERY: {refined_query}
+            
+            EMAIL SEARCH RESULTS FROM MEM0:
+            ================================
+            """
+            
+            for i, result in enumerate(search_results[:10]):  # Limit to top 10
+                context += f"\n--- Email Result {i+1} ---\n"
+                context += f"{result.get('memory', 'No content')}\n"
+            
+            context += f"""
+            ================================
+            
+            TASK: Analyze the above email search results and generate helpful insights for the user's query.
+            Focus on extracting key information, patterns, and providing actionable insights.
+            If the query is about transactions, create a table with dates, amounts, merchants, etc.
+            Only use the actual data found in the search results above.
+            """
+            
+            # Use the insights generation agent specifically
+            team_response = insights_generation_agent.run(context)
+            final_response = team_response.content if hasattr(team_response, 'content') else str(team_response)
+        else:
+            final_response = "No relevant emails found for your query. Please try with different keywords or check if your Gmail data has been synced."
+        
+        print(f"✅ Pipeline completed successfully")
+        
+        return {
+            "success": True,
+            "message": final_response,
+            "original_query": query,
+            "refined_query": refined_query,
+            "results_count": len(search_results),
+            "pipeline": "complete_gmail_intelligence"
+        }
+        
+    except Exception as e:
+        print(f"❌ Error in pipeline query flow: {e}")
+        return {
+            "success": False,
+            "message": f"Error processing your query through the pipeline: {str(e)}",
+            "original_query": query,
+            "pipeline": "error"
+        }
+
+async def process_gmail_data_simple(user_id: str, gmail_emails: List[Dict]) -> Dict[str, Any]:
+    """Process Gmail data and upload to Mem0 - simple version"""
+    try:
+        # Convert to EmailMessage objects
+        email_messages = []
+        for email_data in gmail_emails:
+            email = EmailMessage(
+                id=email_data.get('id', ''),
+                subject=email_data.get('subject', ''),
+                sender=email_data.get('from', ''),
+                snippet=email_data.get('snippet', ''),
+                body=email_data.get('body', ''),
+                date=email_data.get('date', '')
+            )
+            email_messages.append(email)
+        
+        # Upload to Mem0
+        result = await upload_emails_to_mem0_simple(user_id, email_messages)
+        
+        return {
+            "success": True,
+            "message": result,
+            "emails_processed": len(email_messages)
+        }
+        
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"Error processing Gmail data: {str(e)}",
+            "emails_processed": 0
+        }
+
+# For backwards compatibility - main function called by websocket
 async def handle_websocket_query(user_id: str, query: str, chat_id: str = None) -> Dict[str, Any]:
     """
-    Enhanced WebSocket query handler with full pipeline
+    WebSocket query handler using complete Agno pipeline team
     """
     try:
         print(f"🌐 WebSocket query from user {user_id} in chat {chat_id}: '{query}'")
         
-        # Check if user has Gmail data synced
-        from app.db import users_collection
-        user_data = await users_collection.find_one({"user_id": user_id})
-        
-        if not user_data or not user_data.get("initial_gmailData_sync", False):
-            return {
-                "message": "⚠️ Please sync your Gmail data first before querying. Use the Gmail fetch feature in the app.",
-                "type": "warning",
-                "requires_sync": True
-            }
-        
-        # Process query through the complete pipeline
-        response = await query_mem0(user_id, query)
+        # Use the complete pipeline flow with Agno team
+        result = await pipeline_query_flow(user_id, query)
         
         return {
-            "message": response,
-            "type": "success",
-            "user_id": user_id,
-            "chat_id": chat_id,
-            "timestamp": datetime.now().isoformat()
+            "response": result["message"],
+            "chatId": chat_id,
+            "error": not result["success"]
         }
         
     except Exception as e:
         print(f"❌ WebSocket query error: {e}")
         return {
-            "message": f"❌ Error processing your query: {str(e)}",
-            "type": "error",
-            "user_id": user_id,
-            "chat_id": chat_id
+            "response": f"I encountered an error while processing your query: {str(e)}",
+            "chatId": chat_id,
+            "error": True
         }

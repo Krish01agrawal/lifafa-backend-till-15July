@@ -128,7 +128,7 @@ async def gmail_fetch(payload: GmailFetchPayload):
         logger.info(f"JWT decoded. User ID: {user_id}")
 
         # Call the core processing function
-        result = await _trigger_and_process_user_emails(user_id=user_id, access_token=payload.access_token, max_results=4500)
+        result = await _trigger_and_process_user_emails(user_id=user_id, access_token=payload.access_token, max_results=90)
 
         if result["status"] == "error":
             raise HTTPException(
@@ -265,7 +265,7 @@ async def fetch_user_emails(authorization: str = Header(None)):
         access_token = user_in_db["access_token"]
 
         # Call the core processing function
-        result = await _trigger_and_process_user_emails(user_id=user_id, access_token=access_token, max_results=4500) # Default max_results
+        result = await _trigger_and_process_user_emails(user_id=user_id, access_token=access_token, max_results=90)
 
         if result["status"] == "error":
             raise HTTPException(
@@ -293,7 +293,7 @@ async def fetch_user_emails(authorization: str = Header(None)):
 # Alternative endpoint with JWT in body (easier for frontend)
 class EmailFetchRequest(BaseModel):
     jwt_token: str
-    max_results: int = 4500
+    max_results: int = 90
 
 @app.post("/emails/fetch-with-token")
 async def fetch_user_emails_with_token(payload: EmailFetchRequest):
@@ -374,17 +374,28 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
                 detail="User not found"
             )
         
-        # Ensure initial_gmailData_sync is accurate
+        # Check if user needs initial email sync
         has_email_data = await emails_collection.count_documents({"user_id": user_id}) > 0
-        current_sync_status_in_db = user_in_db.get("initial_gmailData_sync")
+        current_sync_status = user_in_db.get("initial_gmailData_sync", False)
+        current_fetched_status = user_in_db.get("fetched_email", False)
 
-        if current_sync_status_in_db is None or current_sync_status_in_db != has_email_data:
-            logger.info(f"Updating initial_gmailData_sync for user {user_id} from {current_sync_status_in_db} to {has_email_data}")
+        # If user has no emails AND hasn't been marked as fetched, trigger background processing
+        if not has_email_data and not current_fetched_status:
+            logger.info(f"User {user_id} needs email sync - marking fetched_email=false for background processing")
             await users_collection.update_one(
                 {"user_id": user_id},
-                {"$set": {"initial_gmailData_sync": has_email_data}}
+                {"$set": {"fetched_email": False, "initial_gmailData_sync": False}}
             )
-            user_in_db["initial_gmailData_sync"] = has_email_data # Reflect change in current dict
+            user_in_db["fetched_email"] = False
+            user_in_db["initial_gmailData_sync"] = False
+        elif has_email_data and not current_sync_status:
+            # If emails exist but sync status is false, update it
+            logger.info(f"User {user_id} has email data - updating initial_gmailData_sync to true")
+            await users_collection.update_one(
+                {"user_id": user_id},
+                {"$set": {"initial_gmailData_sync": True}}
+            )
+            user_in_db["initial_gmailData_sync"] = True
         
         # fetched_email field will be returned as is from the database.
         # It's updated when a fetch process is initiated.
@@ -416,7 +427,7 @@ def convert_objectid_to_str(data):
     return data
 
 # Core email processing function
-async def _trigger_and_process_user_emails(user_id: str, access_token: str, max_results: int = 4500):
+async def _trigger_and_process_user_emails(user_id: str, access_token: str, max_results: int = 90):
     logger.info(f"Starting email processing for user_id: {user_id}")
     try:
         # Mark that email fetch process has been initiated for this user
@@ -427,9 +438,18 @@ async def _trigger_and_process_user_emails(user_id: str, access_token: str, max_
         )
         logger.info(f"fetched_email marked as true for user_id: {user_id}")
 
+        # Get user's refresh token from database
+        user_in_db = await users_collection.find_one({"user_id": user_id})
+        if not user_in_db:
+            raise Exception(f"User {user_id} not found in database")
+        
+        refresh_token = user_in_db.get("refresh_token")
+        if not refresh_token:
+            raise Exception(f"No refresh token found for user {user_id}. Please re-authenticate.")
+        
         # Build Gmail service and fetch emails
         logger.info(f"Building Gmail service for user_id: {user_id}")
-        service = build_gmail_service(access_token)
+        service = build_gmail_service(access_token, refresh_token)
         
         logger.info(f"Fetching emails from Gmail for user_id: {user_id} (max: {max_results})...")
         emails = await fetch_emails(service, max_results=max_results)
@@ -473,23 +493,35 @@ async def check_and_fetch_new_user_emails():
     logger.info("Background worker: Checking for users with fetched_email=false")
     try:
         users_to_fetch = users_collection.find({"fetched_email": False})
+        users_found = 0
         async for user in users_to_fetch:
+            users_found += 1
             user_id = user.get("user_id")
-            access_token = user.get("access_token") # Assuming access_token is stored and valid
+            access_token = user.get("access_token")
             
             if not user_id or not access_token:
                 logger.warning(f"Background worker: Skipping user {user.get('_id')} due to missing user_id or access_token.")
                 continue
 
-            # Check token validity if possible (e.g., expiry if stored)
-            # For simplicity, we assume the token is valid or will be handled by build_gmail_service
-            
             logger.info(f"Background worker: Found user {user_id} with fetched_email=false. Triggering email processing.")
-            # Using a default max_results for background tasks, adjust as needed
-            await _trigger_and_process_user_emails(user_id=user_id, access_token=access_token, max_results=4500) 
-            # Add a small delay or use a more sophisticated queue if you have many users to avoid bursting API limits
-            # await asyncio.sleep(1) # Example delay
+            
+            try:
+                # Process emails for this user
+                result = await _trigger_and_process_user_emails(user_id=user_id, access_token=access_token, max_results=90)
+                logger.info(f"Background worker: Email processing result for user {user_id}: {result}")
+            except Exception as user_error:
+                logger.error(f"Background worker: Failed to process emails for user {user_id}: {str(user_error)}", exc_info=True)
+                # Reset fetched_email to false so it can be retried later
+                await users_collection.update_one(
+                    {"user_id": user_id},
+                    {"$set": {"fetched_email": False}}
+                )
 
+        if users_found == 0:
+            logger.info("Background worker: No users found with fetched_email=false")
+        else:
+            logger.info(f"Background worker: Processed {users_found} users")
+            
         logger.info("Background worker: Finished checking for users.")
     except Exception as e:
         logger.error(f"Background worker: Error during check_and_fetch_new_user_emails: {str(e)}", exc_info=True)
@@ -527,4 +559,37 @@ async def gmail_query_endpoint(payload: TestMem0QueryPayload):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An unexpected error occurred: {str(e)}"
+        )
+
+@app.post("/admin/trigger-email-sync")
+async def trigger_email_sync_for_user(payload: dict):
+    """
+    Manual trigger for email synchronization (for testing/debugging)
+    """
+    user_id = payload.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+    
+    logger.info(f"Manual trigger: Forcing email sync for user_id: {user_id}")
+    
+    try:
+        # Reset user status to trigger background processing
+        await users_collection.update_one(
+            {"user_id": user_id},
+            {"$set": {"fetched_email": False, "initial_gmailData_sync": False}}
+        )
+        
+        # Manually trigger the background worker
+        await check_and_fetch_new_user_emails()
+        
+        return {
+            "status": "success",
+            "message": f"Email sync triggered for user {user_id}",
+            "user_id": user_id
+        }
+    except Exception as e:
+        logger.error(f"Error in manual email sync trigger: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to trigger email sync: {str(e)}"
         )
