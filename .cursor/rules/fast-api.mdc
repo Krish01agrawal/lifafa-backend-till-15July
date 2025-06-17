@@ -1,0 +1,139 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+You are an expert in Python, FastAPI, Agno AI framework, MongoDB, Mem0 memory system, and intelligent email analytics agents.
+
+Key Principles
+- Write concise, technical responses with accurate Python examples for AI agent development.
+- Use functional, declarative programming; avoid classes where possible except for Pydantic models and agent definitions.
+- Prefer iteration and modularization over code duplication.
+- Use descriptive variable names with auxiliary verbs (e.g., is_processed, has_emails, should_analyze).
+- Use lowercase with underscores for directories and files (e.g., agents/email_agent.py, services/email_processor.py).
+- Favor named exports for routes, agent functions, and utility functions.
+- Use the Receive an Object, Return an Object (RORO) pattern.
+
+Python/FastAPI/Agno Agent Development
+- Use def for pure functions and async def for asynchronous operations, especially for LLM calls and database operations.
+- Use type hints for all function signatures. Prefer Pydantic models over raw dictionaries for input validation.
+- File structure: exported router, agent definitions, email processors, memory utilities, database operations, static content, types (models, schemas).
+- Avoid unnecessary curly braces in conditional statements.
+- For single-line statements in conditionals, omit curly braces.
+- Use concise, one-line syntax for simple conditional statements (e.g., if condition: do_something()).
+
+Email Agent Architecture
+- Structure agents with clear separation of concerns:
+  - Email ingestion and parsing (Gmail API integration)
+  - Data preprocessing and cleaning
+  - Memory storage (Mem0) and retrieval
+  - Database operations (MongoDB)
+  - LLM interactions (OpenAI)
+  - Response generation and insights
+- Use async/await patterns for all I/O operations including email fetching, database calls, and LLM requests
+- Implement proper email data schemas with Pydantic models for validation
+- Use background tasks for bulk email processing and memory updates
+
+Error Handling and Validation
+- Prioritize error handling and edge cases:
+  - Handle errors and edge cases at the beginning of functions.
+  - Use early returns for error conditions to avoid deeply nested if statements.
+  - Place the happy path last in the function for improved readability.
+  - Avoid unnecessary else statements; use the if-return pattern instead.
+  - Use guard clauses to handle preconditions and invalid states early.
+  - Implement proper error logging and user-friendly error messages for agent failures.
+  - Use custom error types for Gmail API errors, memory storage failures, and LLM timeouts.
+  - Handle rate limits gracefully for Gmail API and OpenAI API calls.
+
+Dependencies
+- FastAPI
+- Pydantic v2
+- Agno (AI agent framework)
+- Mem0 (memory system)
+- pymongo or motor (async MongoDB driver)
+- openai (OpenAI API client)
+- google-api-python-client (Gmail API)
+- pandas (for email data analysis)
+- python-dotenv (environment management)
+
+Gmail Email Agent Specific Guidelines
+- Use functional components and Pydantic models for email data validation and response schemas.
+- Implement proper Gmail API authentication and token management.
+- Structure email data models with proper typing:
+  - EmailMessage, EmailThread, UserProfile, EmailInsight schemas
+  - Memory objects for storing processed email context
+  - Query and response models for agent interactions
+- Use declarative route definitions with clear return type annotations for agent endpoints.
+- Minimize blocking operations; use async def for Gmail API calls, database operations, and LLM requests.
+- Implement proper email data preprocessing before storing in Mem0.
+- Use background tasks for email synchronization and bulk processing.
+- Cache frequently accessed email metadata and user insights.
+
+Memory Management (Mem0)
+- Structure memory storage with semantic organization:
+  - Store email content, metadata, and extracted insights
+  - Implement proper memory retrieval for context-aware responses
+  - Use memory search for finding relevant emails based on queries
+  - Regularly update memory with new email data and user interactions
+- Implement memory cleanup strategies for old or irrelevant data.
+- Use semantic chunking for large email threads and conversations.
+
+Database Design (MongoDB)
+- Design collections for optimal query patterns:
+  - users: user profiles and preferences
+  - emails: raw email data and metadata
+  - insights: generated insights and analytics
+  - queries: user query history and responses
+- Use proper indexing for email search and filtering operations.
+- Implement data backup strategies and archival policies.
+- Use aggregation pipelines for complex email analytics and reporting.
+
+OpenAI Integration
+- Implement proper prompt engineering for email analysis:
+  - Context-aware prompts with relevant email data
+  - System prompts for consistent agent behavior
+  - User query interpretation and intent detection
+- Handle token limits and context window management effectively.
+- Implement streaming responses for long-running analysis tasks.
+- Use function calling for structured data extraction from emails.
+
+Performance Optimization
+- Minimize blocking I/O operations; use asynchronous operations for all external API calls.
+- Implement intelligent caching for email metadata, user profiles, and generated insights.
+- Use batch processing for bulk email operations and memory updates.
+- Optimize email search and filtering with proper database indexing.
+- Implement rate limiting and throttling for API calls.
+- Use lazy loading for large email datasets and conversation threads.
+
+Agent Behavior Patterns
+- Implement conversational memory to maintain context across user interactions.
+- Use retrieval-augmented generation (RAG) patterns with email data and memory.
+- Structure responses with proper email insights, statistics, and actionable recommendations.
+- Implement multi-turn conversation handling for complex email queries.
+- Use semantic search for finding relevant emails based on natural language queries.
+
+Key Conventions
+1. Rely on FastAPI's dependency injection for managing Gmail API clients, database connections, and agent instances.
+2. Prioritize API performance metrics (response time, email processing speed, insight generation time).
+3. Structure agent workflows clearly:
+   - Email ingestion → preprocessing → memory storage → query processing → insight generation
+   - Use clear separation between data processing and response generation
+   - Implement proper logging and monitoring for agent performance
+4. Use environment variables for all API keys and configuration.
+5. Implement proper data privacy and security measures for email data handling.
+
+Email Data Security
+- Never log or expose sensitive email content in plain text.
+- Implement proper data encryption for stored email data.
+- Use secure authentication and authorization for agent endpoints.
+- Follow data retention policies and implement data deletion capabilities.
+- Ensure compliance with email privacy regulations.
+
+Agent Testing and Monitoring
+- Implement comprehensive testing for email processing pipelines.
+- Use mock data for testing agent responses and insights.
+- Monitor agent performance, accuracy, and user satisfaction.
+- Implement feedback loops for continuous agent improvement.
+- Track email processing metrics and system performance.
+
+Refer to Agno documentation for agent patterns, Mem0 documentation for memory management, FastAPI documentation for API development, and OpenAI documentation for LLM integration best practices.

@@ -350,9 +350,12 @@
       
       try {
         const data = JSON.parse(event.data);
+        console.log("[WebSocket] Parsed data:", data);
         
         // Extract chatId from response
         receivedChatId = data.chatId;
+        console.log("[WebSocket] Received chatId:", receivedChatId);
+        console.log("[WebSocket] Current chatId:", currentChatId);
         
         // ALWAYS update currentChatId from server (backend generates unique IDs)
         if (receivedChatId) {
@@ -366,8 +369,10 @@
         
         if (data && data.error && data.reply && Array.isArray(data.reply) && data.reply.length > 0) {
           botResponseText = `Error: ${data.reply[0]}`;
+          console.log("[WebSocket] Error response:", botResponseText);
         } else if (data && data.reply && Array.isArray(data.reply) && data.reply.length > 0) {
           botResponseText = data.reply[0];
+          console.log("[WebSocket] Bot response text:", botResponseText.substring(0, 100) + "...");
           
           // Check if this is the welcome message
           if (botResponseText.includes("Connected to chat")) {
@@ -385,9 +390,18 @@
         console.error("[WebSocket] Error parsing message:", e, "Raw data:", event.data);
       }
       
+      console.log("[WebSocket] About to append message:");
+      console.log("  - receivedChatId:", receivedChatId);
+      console.log("  - currentChatId:", currentChatId);
+      console.log("  - botResponseText:", botResponseText.substring(0, 50) + "...");
+      console.log("  - isWelcomeMessage:", isWelcomeMessage);
+      
       // Only append message if it's for the current chat
       if (!receivedChatId || receivedChatId === currentChatId) {
+        console.log("[WebSocket] ✅ Appending message to chat");
         appendMessage(isWelcomeMessage ? "System" : "AI Assistant", botResponseText, isWelcomeMessage ? 'system' : 'bot');
+      } else {
+        console.log("[WebSocket] ❌ Skipping message - chat ID mismatch");
       }
     };
 
@@ -435,25 +449,41 @@
   }
 
   function appendMessage(sender, text, type = 'bot') {
+    console.log("[appendMessage] Called with:", { sender, textLength: text?.length, type });
+    
     const chat = document.getElementById("chat");
+    if (!chat) {
+      console.error("[appendMessage] Chat element not found!");
+      return;
+    }
+    
     const messageDiv = document.createElement("div");
     messageDiv.classList.add("message");
     
     if (type === 'user') {
       messageDiv.classList.add("user-message");
       messageDiv.textContent = text;
+      console.log("[appendMessage] Added user message");
     } else if (type === 'bot') {
       messageDiv.classList.add("bot-message");
       // Use marked.parse() to convert markdown to HTML
-      const htmlContent = text ? marked.parse(text) : '';
-      messageDiv.innerHTML = htmlContent;
+      try {
+        const htmlContent = text ? marked.parse(text) : '';
+        messageDiv.innerHTML = htmlContent;
+        console.log("[appendMessage] Added bot message with HTML content");
+      } catch (e) {
+        console.error("[appendMessage] Error parsing markdown:", e);
+        messageDiv.textContent = text; // Fallback to plain text
+      }
     } else if (type === 'system') {
       messageDiv.classList.add("system-message");
       messageDiv.textContent = text;
+      console.log("[appendMessage] Added system message");
     }
     
     chat.appendChild(messageDiv);
     chat.scrollTop = chat.scrollHeight;
+    console.log("[appendMessage] Message appended to chat, total messages:", chat.children.length);
   }
 </script>
 
