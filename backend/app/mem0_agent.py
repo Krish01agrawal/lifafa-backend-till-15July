@@ -1455,6 +1455,7 @@ async def universal_content_search(user_id: str, refined_query: str, original_qu
             'response': f"❌ Error processing query: {str(e)}"
         }
 
+
 def generate_universal_response(original_query: str, refined_query: str, content_data: List[Dict]) -> str:
     """Generate intelligent AI-powered response with insights and analysis"""
     
