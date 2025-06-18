@@ -47,6 +47,12 @@ app.include_router(websocket_router)
 # Initialize APScheduler
 scheduler = AsyncIOScheduler()
 
+# Health check endpoint
+@app.get("/health")
+async def health_check():
+    """Health check endpoint that returns service status."""
+    return {"status": "Ok"}
+
 # Define a Pydantic model for the test query request body
 class TestMem0QueryPayload(BaseModel):
     user_id: str
