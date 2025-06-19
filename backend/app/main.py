@@ -15,7 +15,7 @@ from app.auth import verify_google_token, create_jwt_token, decode_jwt_token
 from app.oauth import generate_auth_url, exchange_code_for_tokens
 from app.db import users_collection, emails_collection
 from app.gmail import build_gmail_service, fetch_emails
-from app.mem0_agent import upload_emails_to_mem0, query_mem0, process_gmail_data_for_user
+from app.mem0_agent_agno import upload_emails_to_mem0, query_mem0, process_gmail_data_for_user, search_emails_in_mem0
 from app.models import GoogleToken, GmailFetchPayload
 from app.websocket import router as websocket_router
 import logging
@@ -226,6 +226,14 @@ async def oauth_callback(code: str = None, state: str = None, error: str = None)
                 "name": user_info.get("name"),
                 "picture": user_info.get("picture")
             }
+            
+            # Check if user has any emails. If not, reset fetch status to re-trigger sync.
+            has_email_data = await emails_collection.count_documents({"user_id": user_id_from_google}) > 0
+            if not has_email_data:
+                logger.info(f"User {user_id_from_google} has no email data. Resetting fetch status to trigger sync on re-login.")
+                update_data["fetched_email"] = False
+                update_data["initial_gmailData_sync"] = False
+            
             await users_collection.update_one(
                 {"user_id": user_id_from_google},
                 {"$set": update_data}
@@ -385,8 +393,28 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         current_sync_status = user_in_db.get("initial_gmailData_sync", False)
         current_fetched_status = user_in_db.get("fetched_email", False)
 
+        # Check if user has data in Mem0 as well
+        has_mem0_data = False
+        if has_email_data:
+            try:
+                mem0_results = await search_emails_in_mem0(user_id, "email", limit=1)
+                has_mem0_data = len(mem0_results) > 0
+                logger.info(f"User {user_id} Mem0 data check: {len(mem0_results) if mem0_results else 0} results found")
+            except Exception as e:
+                logger.warning(f"Failed to check Mem0 data for user {user_id}: {str(e)}")
+                has_mem0_data = False
+
+        # If user has MongoDB emails but no Mem0 data, reset sync to re-trigger Mem0 upload
+        if has_email_data and not has_mem0_data:
+            logger.info(f"User {user_id} has MongoDB emails but no Mem0 data - resetting sync flags to trigger Mem0 upload")
+            await users_collection.update_one(
+                {"user_id": user_id},
+                {"$set": {"fetched_email": False, "initial_gmailData_sync": False}}
+            )
+            user_in_db["fetched_email"] = False
+            user_in_db["initial_gmailData_sync"] = False
         # If user has no emails AND hasn't been marked as fetched, trigger background processing
-        if not has_email_data and not current_fetched_status:
+        elif not has_email_data and not current_fetched_status:
             logger.info(f"User {user_id} needs email sync - marking fetched_email=false for background processing")
             await users_collection.update_one(
                 {"user_id": user_id},
@@ -394,9 +422,9 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             )
             user_in_db["fetched_email"] = False
             user_in_db["initial_gmailData_sync"] = False
-        elif has_email_data and not current_sync_status:
-            # If emails exist but sync status is false, update it
-            logger.info(f"User {user_id} has email data - updating initial_gmailData_sync to true")
+        elif has_email_data and has_mem0_data and not current_sync_status:
+            # If both MongoDB and Mem0 have data but sync status is false, update it
+            logger.info(f"User {user_id} has both email and Mem0 data - updating initial_gmailData_sync to true")
             await users_collection.update_one(
                 {"user_id": user_id},
                 {"$set": {"initial_gmailData_sync": True}}
