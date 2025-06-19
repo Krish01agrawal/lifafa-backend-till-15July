@@ -54,6 +54,7 @@ async def health_check():
     """Health check endpoint that returns service status."""
     return {"status": "Ok","_version": "0.0.2"}
 
+
 @app.get("/websocket/health")
 async def websocket_health():
     """WebSocket-specific health check endpoint"""
@@ -68,6 +69,7 @@ async def websocket_health():
             "active_connections": len(manager.active_connections) if 'manager' in globals() else 0
         }
     }
+
 
 # Define a Pydantic model for the test query request body
 class TestMem0QueryPayload(BaseModel):
