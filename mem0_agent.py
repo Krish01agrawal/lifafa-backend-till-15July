@@ -1185,8 +1185,53 @@ async def search_emails_in_mem0(user_id: str, query: str, limit: int = 500) -> L
         # Check if this is a recent/latest email query
         is_recent_query = any(word in query_lower for word in ["recent", "latest", "newest", "last"])
         
+        # Check if this is a job application response query (not job alerts)
+        is_job_response_query = any(phrase in query_lower for phrase in [
+            "thank you for your application", "interview invitation", "application status",
+            "we have reviewed", "unfortunately", "congratulations", "selected", "not selected",
+            "feedback on your application"
+        ])
+        
         # Primary search with original query
         results = await search_with_retry(query, user_id, limit)
+        
+        # INTELLIGENT POST-PROCESSING: Filter results based on query intent
+        if is_job_response_query and results:
+            print(f"🎯 JOB RESPONSE FILTERING: Analyzing {len(results)} results for actual responses...")
+            
+            filtered_results = []
+            for result in results:
+                memory_content = result.get('memory', '').lower()
+                metadata = result.get('metadata', {})
+                sender = metadata.get('sender', '').lower()
+                
+                # EXCLUDE job alerts and job recommendations
+                is_job_alert = any(alert_phrase in memory_content for alert_phrase in [
+                    'job alert', 'new job', 'job opportunity', 'job positions include',
+                    'actively hiring', 'job update', 'career opportunity', 'job recommendation'
+                ])
+                
+                is_alert_sender = any(alert_sender in sender for alert_sender in [
+                    'jobalerts', 'job alerts', 'linkedin job', 'naukri', 'indeed'
+                ])
+                
+                # INCLUDE actual responses
+                is_response = any(response_phrase in memory_content for response_phrase in [
+                    'thank you for', 'application received', 'we have received',
+                    'interview', 'reviewed your application', 'application status',
+                    'unfortunately', 'congratulations', 'selected', 'not selected',
+                    'next steps', 'feedback', 'hr team', 'hiring manager'
+                ])
+                
+                # Only include if it's a response and not an alert
+                if is_response and not (is_job_alert or is_alert_sender):
+                    filtered_results.append(result)
+                    print(f"✅ INCLUDED: Response from {metadata.get('sender', 'Unknown')}")
+                else:
+                    print(f"❌ EXCLUDED: Job alert from {metadata.get('sender', 'Unknown')}")
+            
+            print(f"🎯 FILTERING COMPLETE: {len(filtered_results)} actual responses found (from {len(results)} total)")
+            results = filtered_results
         
         # For recent email queries, try to get all emails and sort by timestamp
         if is_recent_query and len(results) < 10:
@@ -1406,10 +1451,48 @@ async def universal_content_search(user_id: str, refined_query: str, original_qu
         search_results = await search_emails_in_mem0(user_id, refined_query, 1000)
         print(f"📊 Direct search results: {len(search_results)} emails found")
         
+        # 🔍 DETAILED MEM0 RAW RESPONSE LOGGING
+        print("\n" + "="*80)
+        print("🔍 RAW MEM0 SEARCH RESULTS - BEFORE LLM PROCESSING")
+        print("="*80)
+        
+        if search_results:
+            for i, result in enumerate(search_results[:5]):  # Show first 5 results in detail
+                print(f"\n📧 EMAIL RESULT #{i+1}:")
+                print("-" * 50)
+                print(f"🆔 ID: {result.get('id', 'N/A')}")
+                print(f"🔢 Score: {result.get('score', 'N/A')}")
+                
+                # Memory content (email body)
+                memory_content = result.get('memory', '')
+                print(f"💬 MEMORY CONTENT:")
+                print(f"   Length: {len(memory_content)} characters")
+                print(f"   Preview: {memory_content[:300]}...")
+                
+                # Metadata details
+                metadata = result.get('metadata', {})
+                print(f"📊 METADATA:")
+                for key, value in metadata.items():
+                    print(f"   {key}: {value}")
+                
+                print("-" * 50)
+            
+            if len(search_results) > 5:
+                print(f"\n... and {len(search_results) - 5} more results")
+        else:
+            print("❌ NO RAW RESULTS FROM MEM0")
+        
+        print("="*80)
+        print("🔍 END OF RAW MEM0 RESULTS")
+        print("="*80 + "\n")
+        
         # Step 2: Enhanced search with original query keywords if needed
         if len(search_results) < 20:
             print("🔄 Enhancing search with original query keywords...")
             original_results = await search_emails_in_mem0(user_id, original_query, 500)
+            
+            print(f"\n🔍 ENHANCED SEARCH RAW RESULTS:")
+            print(f"📊 Additional results from original query: {len(original_results)}")
             
             # Combine results without duplicates
             seen_memories = set(result.get('memory', '') for result in search_results)
@@ -1436,8 +1519,40 @@ async def universal_content_search(user_id: str, refined_query: str, original_qu
         
         print(f"📊 CONTENT DATA PREPARED: {len(content_data)} valid results")
         
+        # 📊 PROCESSED DATA SUMMARY FOR LLM
+        print("\n" + "="*80)
+        print("📊 PROCESSED DATA SUMMARY - GOING TO LLM")
+        print("="*80)
+        print(f"📈 Total processed items: {len(content_data)}")
+        
+        if content_data:
+            # Show categories breakdown
+            categories = {}
+            merchants = {}
+            for item in content_data:
+                metadata = item.get('metadata', {})
+                cat = metadata.get('category', 'unknown')
+                merch = metadata.get('merchant', 'unknown')
+                categories[cat] = categories.get(cat, 0) + 1
+                merchants[merch] = merchants.get(merch, 0) + 1
+            
+            print(f"🏷️ Categories found: {dict(sorted(categories.items(), key=lambda x: x[1], reverse=True))}")
+            print(f"🏪 Merchants found: {dict(sorted(merchants.items(), key=lambda x: x[1], reverse=True))}")
+            
+            # Show sample processed data
+            print(f"\n📋 SAMPLE PROCESSED DATA (First 3 items):")
+            for i, item in enumerate(content_data[:3]):
+                print(f"   Item {i+1}: Score={item['score']}, Memory Length={len(item['memory'])}")
+                print(f"   Metadata Keys: {list(item['metadata'].keys())}")
+        
+        print("="*80)
+        print("📊 END OF PROCESSED DATA SUMMARY")
+        print("="*80 + "\n")
+        
         # Step 4: Generate dynamic response based on actual content
+        print("🤖 SENDING TO LLM FOR RESPONSE GENERATION...")
         response = generate_universal_response(original_query, refined_query, content_data)
+        print("✅ LLM RESPONSE GENERATED")
         
         return {
             'status': 'success',
@@ -5301,33 +5416,102 @@ async def query_mem0(user_id: str, query: str) -> str:
 
 async def analyze_and_refine_query(query: str) -> str:
     """
-    Simple query refinement that preserves user intent
+    Intelligent query refinement that preserves specific user intent
+    Eliminates hallucination by creating precise search terms
     """
     try:
         query_lower = query.lower()
         
-        # Simple keyword-based refinement for job queries
-        if any(word in query_lower for word in ["job", "application", "role", "interview", "position", "career"]):
-            return "job application response feedback interview position role career"
+        # PRECISE JOB APPLICATION RESPONSE DETECTION
+        if any(phrase in query_lower for phrase in [
+            "response for job application", "reply for job application", 
+            "job application response", "job application reply",
+            "response to my application", "reply to my application",
+            "application status", "interview invitation", "application accepted",
+            "application rejected", "application feedback"
+        ]):
+            # Look for actual responses, not job alerts
+            return "thank you for your application OR interview invitation OR application status OR we have reviewed OR unfortunately OR congratulations OR selected OR not selected OR feedback on your application"
         
-        # For payment/transaction queries
+        # JOB ALERTS vs JOB RESPONSES - Different intent
+        elif any(phrase in query_lower for phrase in [
+            "job alerts", "job opportunities", "new jobs", "job recommendations"
+        ]):
+            return "job alert OR new position OR job opportunity OR hiring OR career opportunity"
+        
+        # PAYMENT/TRANSACTION QUERIES - Be specific about transactions
         elif any(word in query_lower for word in ["payment", "transaction", "paid", "money", "amount"]):
-            return "payment transaction money amount paid received"
+            if "failed" in query_lower or "declined" in query_lower:
+                return "payment failed OR transaction declined OR payment unsuccessful"
+            elif "successful" in query_lower or "completed" in query_lower:
+                return "payment successful OR transaction completed OR payment confirmed"
+            else:
+                return "payment OR transaction OR paid OR amount OR rupees OR ₹ OR charged OR debited"
         
-        # For recent/latest queries
+        # SUBSCRIPTION QUERIES - Specific to recurring services
+        elif any(word in query_lower for word in ["subscription", "renewal", "recurring"]):
+            return "subscription renewed OR subscription charged OR recurring payment OR auto-renewal"
+        
+        # DELIVERY/ORDER QUERIES - Specific to order status
+        elif any(word in query_lower for word in ["delivery", "delivered", "order status"]):
+            return "delivered OR out for delivery OR order confirmed OR dispatch"
+        
+        # RECENT/LATEST QUERIES - Time-based precision
         elif any(word in query_lower for word in ["recent", "latest", "last", "newest"]):
-            return f"recent latest newest {query}"
-        
-        # For general queries, use original with some enhancement
-        else:
-            # Extract key words from the original query
-            key_words = []
-            for word in query.split():
-                if len(word) > 3 and word.lower() not in ['have', 'been', 'some', 'more', 'that', 'this', 'with', 'from', 'they', 'them']:
-                    key_words.append(word.lower())
+            time_context = ""
+            if "week" in query_lower:
+                time_context = " last week"
+            elif "month" in query_lower:
+                time_context = " last month"
+            elif "today" in query_lower:
+                time_context = " today"
             
-            if key_words:
-                return " ".join(key_words[:5])  # Use top 5 key words
+            # Extract the main subject
+            main_subject = query.replace("recent", "").replace("latest", "").replace("last", "").replace("newest", "").strip()
+            return f"{main_subject}{time_context}"
+        
+        # SPENDING ANALYSIS - Financial behavior queries
+        elif any(phrase in query_lower for phrase in [
+            "how much spent", "total spending", "expenses", "money spent"
+        ]):
+            if "food" in query_lower:
+                return "food order OR restaurant OR delivery OR dining OR swiggy OR zomato"
+            elif "travel" in query_lower:
+                return "uber OR ola OR flight OR train OR bus OR travel"
+            else:
+                return "amount OR rupees OR ₹ OR paid OR charged OR cost OR price"
+        
+        # SPECIFIC MERCHANT QUERIES
+        elif any(merchant in query_lower for merchant in [
+            "swiggy", "zomato", "amazon", "flipkart", "netflix", "spotify", "uber", "ola"
+        ]):
+            # Extract the specific merchant mentioned
+            for merchant in ["swiggy", "zomato", "amazon", "flipkart", "netflix", "spotify", "uber", "ola"]:
+                if merchant in query_lower:
+                    return merchant
+        
+        # DEFAULT: Extract key meaningful words only
+        else:
+            # Remove common stop words and keep only meaningful terms
+            stop_words = {
+                'i', 'me', 'my', 'myself', 'we', 'our', 'ours', 'ourselves', 'you', 'your', 'yours',
+                'yourself', 'yourselves', 'he', 'him', 'his', 'himself', 'she', 'her', 'hers',
+                'herself', 'it', 'its', 'itself', 'they', 'them', 'their', 'theirs', 'themselves',
+                'what', 'which', 'who', 'whom', 'this', 'that', 'these', 'those', 'am', 'is', 'are',
+                'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'having', 'do', 'does',
+                'did', 'doing', 'a', 'an', 'the', 'and', 'but', 'if', 'or', 'because', 'as', 'until',
+                'while', 'of', 'at', 'by', 'for', 'with', 'about', 'against', 'between', 'into',
+                'through', 'during', 'before', 'after', 'above', 'below', 'up', 'down', 'in', 'out',
+                'on', 'off', 'over', 'under', 'again', 'further', 'then', 'once', 'some', 'any',
+                'got', 'get', 'had', 'has'
+            }
+            
+            # Extract meaningful words
+            words = query.lower().split()
+            meaningful_words = [word for word in words if word not in stop_words and len(word) > 2]
+            
+            if meaningful_words:
+                return " ".join(meaningful_words[:3])  # Use top 3 meaningful words
             else:
                 return query
         
