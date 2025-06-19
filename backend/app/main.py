@@ -18,6 +18,7 @@ from app.gmail import build_gmail_service, fetch_emails
 from app.mem0_agent_agno import upload_emails_to_mem0, query_mem0, process_gmail_data_for_user, search_emails_in_mem0
 from app.models import GoogleToken, GmailFetchPayload
 from app.websocket import router as websocket_router
+from app.websocket import manager
 import logging
 from bson import ObjectId
 from pydantic import BaseModel
@@ -52,6 +53,21 @@ scheduler = AsyncIOScheduler()
 async def health_check():
     """Health check endpoint that returns service status."""
     return {"status": "Ok","_version": "0.0.2"}
+
+@app.get("/websocket/health")
+async def websocket_health():
+    """WebSocket-specific health check endpoint"""
+    return {
+        "status": "healthy", 
+        "websocket_endpoints": [
+            "/ws/chat",
+            "/ws/chat/{chat_id}"
+        ],
+        "websocket_url": "ws://your-domain.com/ws/chat/{chat_id}",
+        "connection_manager": {
+            "active_connections": len(manager.active_connections) if 'manager' in globals() else 0
+        }
+    }
 
 # Define a Pydantic model for the test query request body
 class TestMem0QueryPayload(BaseModel):
