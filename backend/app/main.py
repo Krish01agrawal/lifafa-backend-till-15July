@@ -51,7 +51,7 @@ scheduler = AsyncIOScheduler()
 @app.get("/health")
 async def health_check():
     """Health check endpoint that returns service status."""
-    return {"status": "Ok"}
+    return {"status": "Ok","_version": "0.0.2"}
 
 # Define a Pydantic model for the test query request body
 class TestMem0QueryPayload(BaseModel):
