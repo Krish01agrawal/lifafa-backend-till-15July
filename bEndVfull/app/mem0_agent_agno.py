@@ -213,194 +213,90 @@ intelligence_agent = Agent(
         - If about HEALTH: Create health and medical insights
         - If about ANY OTHER TOPIC: Create relevant topical analysis
         
-        STEP 1.5: FOR FINANCIAL ANALYSIS - EXTRACT COMPREHENSIVE TRANSACTION DATA
-        When analyzing financial emails, extract ALL available transaction details including:
-        
-        Core Transaction Data:
-        - fintransaction_id, date_time (exact timestamp), receiver/merchant
-        - amount (numeric), currency, transaction_type (debit/credit/transfer)
-        - transaction_status, reference_number, order_id
-        
-        Payment & Banking Details:
-        - payment_medium (UPI/card/bank transfer), bank_name, account_number (masked)
-        - card_number (masked last 4 digits), card_type, upi_id
-        - emi_details, processing_fee, tax_amount, cashback_amount
-        
-        Location & Device Context:
-        - location (city/state/country), merchant_location, device_type
-        - channel_used (online/mobile/ATM), authentication_method
-        - ip_address, user_agent (if available in email headers)
-        
-        Additional Details:
-        - merchant_category, subcategory, description
-        - subscription details (is_subscription, frequency, next_due_date)
-        - promotional_offer, discount_amount, loyalty_points
-        - risk_score, unusual_activity_flag
-        - notes, tags, user_annotations
-        
-        Always format each transaction with all available fields, showing "Not Available" for missing data.
-        
-        CRITICAL: For financial transactions, you MUST extract actual values from email content:
-        - Look for transaction IDs, reference numbers, order IDs in email body
-        - Extract exact amounts with currency symbols (₹, $, etc.)
-        - Find merchant/receiver names from email sender or content
-        - Identify payment methods mentioned (UPI, card, bank transfer)
-        - Extract dates and times from email timestamps or content
-        - Look for account numbers, card numbers (mask sensitive digits)
-        - Find transaction descriptions, purposes, or what was purchased
-        - Extract any fees, taxes, or additional charges mentioned
-        - Identify if it's a subscription, one-time payment, or recurring
-        
-        Do NOT use placeholder text - extract real data from the actual email content provided.
-        
-        MANDATORY TRANSACTION EXTRACTION EXAMPLE:
-        When you find a financial email, you MUST extract details like this:
-        
-        SBI Mutual Fund Transaction
-        - Email Source: abc@camsonline.com  
-        - Date: 19-Jun-2025
-        - Time: 4:15 AM
-        - Amount: ₹499.98 (extract actual amount from email body)
-        - Transaction ID: [look for reference/transaction number in email]
-        - Order ID: [look for order reference if available]
-        - Receiver: SBI Mutual Fund
-        - Payment Mode: [extract from email - UPI/Bank Transfer/Card]
-        - Description: [extract purpose/description from email content]
-        - Status: [extract transaction status from email]
-        
-        You MUST show actual extracted values, not generic descriptions.
-        
         STEP 2: GENERATE APPROPRIATE RESPONSE FORMAT
         
         FOR JOB APPLICATIONS:
-        🚀 GMAIL CAREER INTELLIGENCE REPORT 🚀
-        Query: "[exact user query]"
+        # 🚀 GMAIL CAREER INTELLIGENCE REPORT 🚀
+        ## Query: "[exact user query]"
         
-        💼 EXECUTIVE SUMMARY - YOUR CAREER DNA
-        🎯 INSTANT INSIGHTS:
-        - 📧 Total Applications Tracked: [count] applications across [timeframe]
-        - 📊 Response Rate: [percentage]% of applications received responses
-        - 🏆 Top Industry Focus: [industry] - [percentage]% of applications
-        - ⚡ Application Velocity: [frequency] applications per [timeframe]
-        - 🎪 Career Personality: [career type based on application patterns]
+        ### 💼 EXECUTIVE SUMMARY - YOUR CAREER DNA
+        **🎯 INSTANT INSIGHTS:**
+        - 📧 **Total Applications Tracked**: [count] applications across [timeframe]
+        - 📊 **Response Rate**: [percentage]% of applications received responses
+        - 🏆 **Top Industry Focus**: [industry] - [percentage]% of applications
+        - ⚡ **Application Velocity**: [frequency] applications per [timeframe]
+        - 🎪 **Career Personality**: [career type based on application patterns]
         
         FOR FINANCIAL QUERIES:
-        🔥 GMAIL FINANCIAL INTELLIGENCE REPORT 🔥
-        Query: "[exact user query]"
+        # 🔥 GMAIL FINANCIAL INTELLIGENCE REPORT 🔥
+        ## Query: "[exact user query]"
         
-        💎 EXECUTIVE SUMMARY - YOUR FINANCIAL DNA
-        🎯 INSTANT INSIGHTS:
-        - 💰 Total Spending Power: ₹[amount] across [count] transactions
-        - 📊 Financial Behavior Score: [score]/10 (Based on spending consistency)
-        - 🏆 Top Spending Category: [category] - [percentage]% of total budget
-        - ⚡ Average Transaction Velocity: ₹[amount] every [frequency]
-        - 🎪 Spending Personality: [personality type]
+        ### 💎 EXECUTIVE SUMMARY - YOUR FINANCIAL DNA
+        **🎯 INSTANT INSIGHTS:**
+        - 💰 **Total Spending Power**: ₹[amount] across [count] transactions
+        - 📊 **Financial Behavior Score**: [score]/10 (Based on spending consistency)
+        - 🏆 **Top Spending Category**: [category] - [percentage]% of total budget
+        - ⚡ **Average Transaction Velocity**: ₹[amount] every [frequency]
+        - 🎪 **Spending Personality**: [personality type]
         
         CONTINUE WITH RELEVANT SECTIONS BASED ON QUERY TYPE:
         
         FOR JOB APPLICATIONS - INCLUDE:
-        📋 COMPLETE APPLICATION BREAKDOWN
-        Date | Company | Position | Status | Response Type | Insights
-        [Create detailed breakdown with actual job application data from emails]
+        ### 📋 COMPLETE APPLICATION BREAKDOWN
+        | 📅 Date | 🏢 Company | 📍 Position | 📊 Status | 💬 Response Type | 🔍 Insights |
+        |---------|------------|-------------|----------|------------------|-------------|
+        [Create detailed table with actual job application data from emails]
         
-        🎯 CAREER INTELLIGENCE MATRIX
-        🏢 COMPANY TARGETING STRATEGY
-        - [Company] Application Pattern: [count] applications - [response analysis]
-        - 🔥 CAREER INSIGHT: [specific pattern from application data]
-        - 💡 OPTIMIZATION: [specific career strategy recommendation]
+        ### 🎯 CAREER INTELLIGENCE MATRIX
+        **🏢 COMPANY TARGETING STRATEGY**
+        - **[Company] Application Pattern**: [count] applications - [response analysis]
+        - **🔥 CAREER INSIGHT**: [specific pattern from application data]
+        - **💡 OPTIMIZATION**: [specific career strategy recommendation]
         
-        📊 RESPONSE ANALYSIS
-        - Positive Responses: [count] ([percentage]%)
-        - Rejections: [count] ([percentage]%)
-        - No Response: [count] ([percentage]%)
-        - 🔥 INSIGHT: [pattern analysis from response data]
-        - 💡 STRATEGY: [application improvement tips]
+        **📊 RESPONSE ANALYSIS**
+        - **Positive Responses**: [count] ([percentage]%)
+        - **Rejections**: [count] ([percentage]%)
+        - **No Response**: [count] ([percentage]%)
+        - **🔥 INSIGHT**: [pattern analysis from response data]
+        - **💡 STRATEGY**: [application improvement tips]
         
-        FOR FINANCIAL QUERIES - PROVIDE COMPREHENSIVE ANALYSIS:
+        FOR FINANCIAL QUERIES - INCLUDE:
+        ### 📋 COMPLETE TRANSACTION BREAKDOWN
+        | 📅 Date | 💰 Amount | 🏪 Merchant | 🎯 Category | 💳 Method | 🔍 Insights |
+        |---------|----------|-------------|-------------|-----------|-------------|
+        [Create detailed table with actual transaction data from emails]
         
-        Transaction Summary and Email Analysis
+        ### 🧠 BEHAVIORAL FINANCIAL PSYCHOLOGY
+        **⏰ TIME-BASED SPENDING PATTERNS**
+        - **Peak Spending Hour**: [time] - [insight from timestamps]
+        - **Weekend vs Weekday**: [ratio] - [analysis from dates]
         
-        Based on your request to list all transactions, I've analyzed your emails to extract relevant financial activities. Here's a detailed breakdown:
+        **🎭 MERCHANT RELATIONSHIP ANALYSIS**
+        - **Brand Loyalty Score**: [score]/10 - [based on frequency data]
+        - **Merchant Diversity**: [analysis of different merchants]
         
-        Individual Transaction Details
+        ### 🚀 PREDICTIVE FINANCIAL INTELLIGENCE
+        **📈 SPENDING TRAJECTORY**
+        - **Monthly Burn Rate**: ₹[amount] - [trend analysis]
+        - **Projected Annual Spending**: ₹[amount] based on current patterns
+        - **Risk Assessment**: [assessment based on spending patterns]
         
-        ALWAYS extract and show actual data from emails like this format:
-        
-        1. SBI Mutual Fund Transaction
-           Email Source: enq_sbimf@camsonline.com
-           Date: 19-Jun-2025  
-           Time: 3:15 AM
-           Amount: ₹499.98
-           Transaction ID: [extract actual ID from email content]
-           Receiver: SBI Mutual Fund
-           Payment Mode: [extract actual payment method]
-           Description: [extract actual transaction purpose]
-           Status: Transaction confirmed
-        
-        2. [Next Transaction Name]
-           Email Source: [actual email sender]
-           Date: [actual date from email]
-           Time: [actual time from email]
-           Amount: ₹[actual amount from email]
-           Transaction ID: [actual transaction ID]
-           Receiver: [actual receiver name]
-           Payment Mode: [actual payment method]
-           Description: [actual description]
-           Status: [actual status]
-        
-        [Continue for all financial transactions found in emails]
-        
-        🔍 Additional Insights and Recommendations
-        
-        Email Categories Analysis:
-        - Financial: [X] emails
-        - General: [X] emails
-        - Professional: [X] emails
-        
-        Merchants/Services Involved:
-        [List all merchants and services found in emails with brief context]
-        
-        Query Relevance:
-        [Analysis of how emails relate to the user's query]
-        
-        📌 Recommendations:
-        1. [Specific actionable recommendation]
-        2. [Another relevant suggestion]
-        3. [Security or financial management tip]
-        
-        Total Transactions: [X] transactions worth ₹[Total Amount]
-        
-        🧠 BEHAVIORAL FINANCIAL PSYCHOLOGY
-        ⏰ TIME-BASED SPENDING PATTERNS
-        - Peak Spending Hour: [time] - [insight from timestamps]
-        - Weekend vs Weekday: [ratio] - [analysis from dates]
-        
-        🎭 MERCHANT RELATIONSHIP ANALYSIS
-        - Brand Loyalty Score: [score]/10 - [based on frequency data]
-        - Merchant Diversity: [analysis of different merchants]
-        
-        🚀 PREDICTIVE FINANCIAL INTELLIGENCE
-        📈 SPENDING TRAJECTORY
-        - Monthly Burn Rate: ₹[amount] - [trend analysis]
-        - Projected Annual Spending: ₹[amount] based on current patterns
-        - Risk Assessment: [assessment based on spending patterns]
-        
-        💎 EXCLUSIVE INSIGHTS (The WOW Factor)
-        🔥 HIDDEN PATTERNS DISCOVERED:
+        ### 💎 EXCLUSIVE INSIGHTS (The WOW Factor)
+        **🔥 HIDDEN PATTERNS DISCOVERED:**
         [Reveal 2-3 surprising insights from actual email data]
         
-        🎪 FINANCIAL PERSONALITY PROFILE:
-        - Spending Style: [analysis based on transaction patterns]
-        - Risk Tolerance: [assessment from spending behavior]
+        **🎪 FINANCIAL PERSONALITY PROFILE:**
+        - **Spending Style**: [analysis based on transaction patterns]
+        - **Risk Tolerance**: [assessment from spending behavior]
         
-        🏆 ACTIONABLE INTELLIGENCE DASHBOARD
-        ⚡ IMMEDIATE ACTIONS (Next 7 Days)
+        ### 🏆 ACTIONABLE INTELLIGENCE DASHBOARD
+        **⚡ IMMEDIATE ACTIONS (Next 7 Days)**
         [3 specific actions with potential savings based on data]
         
-        🎯 STRATEGIC MOVES (Next 30 Days)
+        **🎯 STRATEGIC MOVES (Next 30 Days)**
         [3 strategic recommendations based on patterns]
         
-        🚀 LONG-TERM WEALTH STRATEGY (Next 12 Months)
+        **🚀 LONG-TERM WEALTH STRATEGY (Next 12 Months)**
         [3 long-term strategies based on financial behavior]
         
         ### 📱 SMART ALERTS & NOTIFICATIONS
@@ -410,20 +306,16 @@ intelligence_agent = Agent(
         - FIRST: Identify the EXACT topic/type of the user's query
         - MATCH the response format to the query type (career, financial, travel, etc.)
         - Use ONLY actual data from emails provided
-        - **COMPREHENSIVE DETAILS**: Provide detailed breakdown showing individual email processing
-        - **CLEAN FORMATTING**: NO hashtags (#), NO asterisks (*), NO bold (**), NO complex symbols - use plain text only
         - Extract relevant information based on query type:
           * For job applications: company names, positions, response types, dates
-          * For finances: Show "EMAIL X PROCESSED" format with Category, Merchant, Amount, Payment Method, Content Overview
+          * For finances: amounts, merchants, transaction types, dates
           * For travel: destinations, dates, booking details, costs
           * For any topic: relevant details from email content
-        - Include comprehensive insights: email categories analysis, merchants involved, query relevance
-        - Provide specific actionable recommendations
+        - Make insights specific and actionable for the query topic
         - Include confidence levels for major claims
         - Never hallucinate or invent data
         - Base all analysis on actual email content provided
         - If query doesn't match email data, clearly state what was found vs requested
-        - **FORMATTING RULES**: NO hashtags (#), NO asterisks (*), NO bold (**) - use plain text with simple indentation only
     """),
     tools=[PythonTools()],
     show_tool_calls=False,
@@ -481,18 +373,13 @@ response_enhancer = Agent(
         - Generate responses that DIRECTLY address the user's actual question
         - Match response type to query intent (don't give financial reports for LinkedIn queries)
         - Use actual email content and metadata provided
-        - **COMPREHENSIVE ANALYSIS**: Show detailed individual email processing like "EMAIL 1 PROCESSED" with all relevant details
-        - **SIMPLE FORMATTING**: NO hashtags (#), NO asterisks (*), NO bold (**), NO complex symbols - plain text only
-        - Provide specific, data-driven insights including email categories analysis and merchant breakdown
+        - Provide specific, data-driven insights
         - Include confidence levels for major claims
         - Make recommendations practical and actionable
-        - Use engaging, professional language with minimal but appropriate emojis
-        - Structure responses with clear sections but simple formatting
-        - **NO OVERFORMATTING**: Strictly NO hashtags (#), NO asterisks (*), NO bold (**), NO complex symbols - plain text responses only
+        - Use engaging, professional language with appropriate emojis
+        - Structure responses with clear headers and sections
         
-        Always provide detailed, comprehensive responses with clean, professional formatting.
-        
-        CRITICAL FORMATTING RULE: Remove ALL hashtags (#), asterisks (*), bold (**), and complex symbols from final response. Use plain text with simple spacing and indentation only.
+        Always provide responses that are directly relevant to what the user is asking for.
     """),
     show_tool_calls=False,
     markdown=True
@@ -1062,12 +949,7 @@ async def query_mem0(user_id: str, query: str) -> str:
         total_amount = 0
         payment_method_stats = {}
         
-        print(f"🔄 Processing {len(search_results)} search results with deduplication...")
-        
-        # Deduplication tracking
-        unique_transactions = {}
-        duplicate_count = 0
-        
+        print(f"🔄 Processing {len(search_results)} search results...")
         for i, result in enumerate(search_results):
             # Results are already validated and cleaned
             memory = result.get('memory', '')
@@ -1077,36 +959,26 @@ async def query_mem0(user_id: str, query: str) -> str:
             merchant = metadata.get('merchant', 'unknown')
             amount = metadata.get('amount')
             payment_method = metadata.get('payment_method', 'unknown')
-            timestamp = metadata.get('timestamp', '')
+            
+            category_stats[category] = category_stats.get(category, 0) + 1
+            merchant_stats[merchant] = merchant_stats.get(merchant, 0) + 1
+            payment_method_stats[payment_method] = payment_method_stats.get(payment_method, 0) + 1
             
             # Extract numeric amount for calculations
             numeric_amount = 0
             if amount:
+                amount_data.append(amount)
                 # Try to extract numeric value from amount string
                 import re
                 amount_match = re.search(r'[\d,]+\.?\d*', str(amount))
                 if amount_match:
                     try:
                         numeric_amount = float(amount_match.group().replace(',', ''))
+                        total_amount += numeric_amount
                     except ValueError:
                         pass
             
-            # Create deduplication key: merchant + amount + date (YYYY-MM-DD)
-            date_part = timestamp[:10] if timestamp and len(timestamp) >= 10 else 'unknown'
-            dedup_key = f"{merchant}_{numeric_amount}_{date_part}"
-            
-            # Check for duplicates
-            if dedup_key in unique_transactions and numeric_amount > 0:
-                # This is a duplicate transaction
-                duplicate_count += 1
-                existing = unique_transactions[dedup_key]
-                existing['source_emails'].append(f"Email {i+1}")
-                existing['duplicate_count'] += 1
-                print(f"🔄 DUPLICATE: Email {i+1} merged into {dedup_key} (Total sources: {len(existing['source_emails'])})")
-                continue
-            
-            # New unique transaction
-            transaction_data = {
+            email_data.append({
                 'content': memory[:400],
                 'category': category,
                 'merchant': merchant,
@@ -1114,28 +986,10 @@ async def query_mem0(user_id: str, query: str) -> str:
                 'numeric_amount': numeric_amount,
                 'payment_method': payment_method,
                 'sender': metadata.get('sender', ''),
-                'timestamp': timestamp,
+                'timestamp': metadata.get('timestamp', ''),
                 'score': result.get('score', 0),
-                'has_amount': amount is not None,
-                'source_emails': [f"Email {i+1}"],
-                'duplicate_count': 1,
-                'dedup_key': dedup_key,
-                'fintransaction_id': dedup_key[:12]  # Short transaction ID
-            }
-            
-            # Store unique transaction
-            unique_transactions[dedup_key] = transaction_data
-            email_data.append(transaction_data)
-            
-            # Update statistics (only for unique transactions)
-            category_stats[category] = category_stats.get(category, 0) + 1
-            merchant_stats[merchant] = merchant_stats.get(merchant, 0) + 1
-            payment_method_stats[payment_method] = payment_method_stats.get(payment_method, 0) + 1
-            
-            # Add to amount tracking
-            if amount:
-                amount_data.append(amount)
-                total_amount += numeric_amount
+                'has_amount': amount is not None
+            })
             
             # Log processing details for first few results
             if i < 3:
@@ -1145,18 +999,8 @@ async def query_mem0(user_id: str, query: str) -> str:
                 print(f"├─ Amount          : {amount}")
                 print(f"├─ Numeric Amount  : ₹{numeric_amount:,.2f}")
                 print(f"├─ Payment Method  : {payment_method}")
-                print(f"├─ Transaction ID  : {dedup_key[:12]}")
-                print(f"├─ Source Emails   : {', '.join(transaction_data['source_emails'])}")
-                print(f"├─ Status          : {'🆕 NEW UNIQUE' if dedup_key not in unique_transactions or len(transaction_data['source_emails']) == 1 else '🔄 MERGED'}")
                 print(f"└─ Content         : {memory[:60]}...")
                 print(f"📊" + "─"*78 + "📊")
-        
-        # Log deduplication summary
-        print(f"\n🔍 DEDUPLICATION SUMMARY:")
-        print(f"├─ Total Emails Processed : {len(search_results)}")
-        print(f"├─ Unique Transactions    : {len(unique_transactions)}")
-        print(f"├─ Duplicates Merged      : {duplicate_count}")
-        print(f"└─ Deduplication Rate     : {(duplicate_count/len(search_results)*100):.1f}%")
         
         # Log processing summary
         print(f"\n📊" + "┏" + "━"*76 + "┓" + "📊")
@@ -1206,7 +1050,7 @@ async def query_mem0(user_id: str, query: str) -> str:
         2. **USES APPROPRIATE CONTEXT** - Match the response type to the query intent
         3. **PROVIDES DEEP INSIGHTS** - Extract meaningful patterns from the email data
         4. **OFFERS ACTIONABLE RECOMMENDATIONS** - Give practical next steps
-        5. MAINTAINS PROFESSIONAL FORMATTING - Use clear structure with minimal emojis, NO hashtags, NO asterisks, NO bold
+        5. **MAINTAINS PROFESSIONAL FORMATTING** - Use clear structure and emojis
         
         INTENT-SPECIFIC REQUIREMENTS:
         - LINKEDIN: Focus on professional networking, connections, job alerts, account activity
