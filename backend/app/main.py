@@ -1,6 +1,7 @@
 import os
 from dotenv import load_dotenv
 from typing import Optional
+from datetime import datetime
 
 # Determine the path to the .env file (two levels up from this file)
 # main.py is in backend/app/main.py, .env is in the root
@@ -21,6 +22,7 @@ from app.models import GoogleToken, GmailFetchPayload
 from app.websocket import router as websocket_router
 from app.websocket import manager
 import logging
+import asyncio
 from bson import ObjectId
 from pydantic import BaseModel
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -30,14 +32,28 @@ from app.financial_agent import (
     get_financial_transactions
 )
 
+# Import scalability components
+from app.config import CONFIG, EMAIL_PROCESSING_TIMEOUT, CONCURRENT_USERS_LIMIT
+from app.middleware import (
+    rate_limit_middleware, email_processing_context, 
+    get_health_status, resource_manager
+)
+
 # Configure basic logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI()
+app = FastAPI(
+    title="Gmail Chatbot API",
+    description="Scalable Gmail Chatbot with Financial Analytics",
+    version="1.2.0"
+)
 
 # Define the security scheme
 security = HTTPBearer()
+
+# Add scalability middleware FIRST (before CORS)
+app.middleware("http")(rate_limit_middleware)
 
 # Allow CORS from frontend origin (adjust as needed)
 app.add_middleware(
@@ -54,11 +70,46 @@ app.include_router(websocket_router)
 # Initialize APScheduler
 scheduler = AsyncIOScheduler()
 
-# Health check endpoint
+# Health check endpoint with scalability metrics
 @app.get("/health")
 async def health_check():
-    """Health check endpoint that returns service status."""
-    return {"status": "Ok","_version": "0.0.2"}
+    """Enhanced health check endpoint with scalability metrics."""
+    health_data = get_health_status()
+    return {
+        "status": "Ok",
+        "_version": "1.2.0",
+        "scalability": health_data,
+        "config": {
+            "concurrent_users_limit": CONCURRENT_USERS_LIMIT,
+            "email_processing_timeout": EMAIL_PROCESSING_TIMEOUT
+        },
+        "workers": {
+            "email_sync_worker": {
+                "interval": "30 seconds",
+                "status": "active"
+            },
+            "financial_analysis_worker": {
+                "interval": "45 seconds", 
+                "status": "active"
+            }
+        }
+    }
+
+@app.get("/metrics")
+async def get_metrics():
+    """Get detailed system metrics for monitoring."""
+    return get_health_status()
+
+@app.get("/metrics/users")
+async def get_user_metrics():
+    """Get active user metrics."""
+    stats = resource_manager.get_stats()
+    return {
+        "active_users": stats.get("active_users", 0),
+        "concurrent_limit": CONCURRENT_USERS_LIMIT,
+        "active_user_list": stats.get("active_user_list", []),
+        "utilization_percent": (stats.get("active_users", 0) / CONCURRENT_USERS_LIMIT) * 100
+    }
 
 
 @app.get("/websocket/health")
@@ -106,6 +157,11 @@ async def google_login(payload: GoogleToken):
             user_to_insert = raw_user_info_from_google.copy() # Use a copy
             user_to_insert['initial_gmailData_sync'] = False # Initialize initial_gmailData_sync
             user_to_insert['fetched_email'] = False  # Initialize fetched_email
+            # Initialize financial analysis fields
+            user_to_insert['financial_analysis_completed'] = False
+            user_to_insert['financial_analysis_date'] = None
+            user_to_insert['financial_transactions_count'] = 0
+            user_to_insert['financial_processing_method'] = None
             insert_result = await users_collection.insert_one(user_to_insert)
             logger.info(f"New user created. Inserted ID: {insert_result.inserted_id}")
             # Fetch the newly created user to get all fields including the auto-generated _id
@@ -157,16 +213,28 @@ async def gmail_fetch(payload: GmailFetchPayload):
         user_id = user.get("user_id")
         logger.info(f"JWT decoded. User ID: {user_id}")
 
-        # Call the core processing function
-        result = await _trigger_and_process_user_emails(user_id=user_id, access_token=payload.access_token, max_results=2500)
-
-        if result["status"] == "error":
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=result["message"]
+        # Use email processing context for resource management
+        async with email_processing_context(user_id) as rm:
+            # Call the core processing function with timeout
+            result = await asyncio.wait_for(
+                _trigger_and_process_user_emails(user_id=user_id, access_token=payload.access_token, max_results=3500),
+                timeout=EMAIL_PROCESSING_TIMEOUT
             )
 
-        return {"message": result["message"], "count": result["count"]}
+            if result["status"] == "error":
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=result["message"]
+                )
+
+            return {"message": result["message"], "count": result["count"]}
+            
+    except asyncio.TimeoutError:
+        logger.error(f"Gmail fetch timeout for user {user_id}")
+        raise HTTPException(
+            status_code=status.HTTP_408_REQUEST_TIMEOUT,
+            detail=f"Email processing timed out after {EMAIL_PROCESSING_TIMEOUT} seconds"
+        )
     except HTTPException as e:
         logger.error(f"HTTPException in gmail_fetch: {e.detail}", exc_info=True)
         raise
@@ -177,20 +245,7 @@ async def gmail_fetch(payload: GmailFetchPayload):
             detail=f"An unexpected error occurred during gmail fetch: {str(e)}"
         )
 
-@app.post("/test/mem0-query")
-async def test_mem0_query_endpoint(payload: TestMem0QueryPayload):
-    logger.info(f"Received request for /test/mem0-query for user_id: {payload.user_id} with query: {payload.query}")
-    try:
-        # Note: This endpoint does not perform JWT authentication for simplicity in direct testing.
-        # In a production scenario, you would likely want to protect this.
-        results = await query_mem0(user_id=payload.user_id, query=payload.query)
-        return results
-    except Exception as e:
-        logger.error(f"Error in /test/mem0-query endpoint: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"An unexpected error occurred: {str(e)}"
-        )
+# Removed duplicate /test/mem0-query endpoint - functionality available via /gmail/query
 
 # Add new OAuth routes after the existing CORS setup
 @app.get("/auth/login")
@@ -277,111 +332,6 @@ async def oauth_callback(code: str = None, state: str = None, error: str = None)
         logger.error(f"Error in OAuth callback: {e}")
         return RedirectResponse(url=f"{frontend_url}?error=auth_failed")
 
-@app.post("/emails/fetch")
-async def fetch_user_emails(authorization: str = Header(None)):
-    """
-    Fetch emails for authenticated user.
-    Expects Authorization header with Bearer token.
-    """
-    try:
-        # Validate authorization header
-        if not authorization or not authorization.startswith("Bearer "):
-            raise HTTPException(status_code=401, detail="Missing or invalid authorization header")
-        
-        token = authorization.split(" ")[1]
-        user = decode_jwt_token(token)
-        user_id = user.get("user_id")
-        user_email = user.get("email")
-        
-        logger.info(f"Fetching emails for user: {user_email} via /emails/fetch")
-        
-        # Get user's stored access token from database
-        user_in_db = await users_collection.find_one({"user_id": user_id})
-        if not user_in_db or not user_in_db.get("access_token"):
-            raise HTTPException(status_code=400, detail="User not found or no access token available")
-        
-        access_token = user_in_db["access_token"]
-
-        # Call the core processing function
-        result = await _trigger_and_process_user_emails(user_id=user_id, access_token=access_token, max_results=2500)
-
-        if result["status"] == "error":
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=result["message"]
-            )
-        
-        return {
-            "success": True,
-            "message": result["message"],
-            "email_count": result["count"],
-            "user_email": user_email
-        }
-        
-    except HTTPException as e:
-        logger.error(f"HTTPException in fetch_user_emails: {e.detail}")
-        raise
-    except Exception as e:
-        logger.error(f"Error in fetch_user_emails: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to fetch emails: {str(e)}"
-        )
-
-# Alternative endpoint with JWT in body (easier for frontend)
-class EmailFetchRequest(BaseModel):
-    jwt_token: str
-    max_results: int = 2500
-
-@app.post("/emails/fetch-with-token")
-async def fetch_user_emails_with_token(payload: EmailFetchRequest):
-    """
-    Fetch emails for authenticated user.
-    Expects JWT token in request body.
-    """
-    try:
-        # Decode JWT token
-        user = decode_jwt_token(payload.jwt_token)
-        user_id = user.get("user_id")
-        user_email = user.get("email")
-        
-        logger.info(f"Fetching emails for user: {user_email} via /emails/fetch-with-token")
-        
-        # Get user's stored access token from database
-        user_in_db = await users_collection.find_one({"user_id": user_id})
-        if not user_in_db or not user_in_db.get("access_token"):
-            # If access token is not in DB, this endpoint cannot proceed as it doesn't receive one directly.
-            # The /gmail/fetch endpoint is more suitable if the client has the access token.
-            raise HTTPException(status_code=400, detail="User not found or no access token available in DB for this flow.")
-        
-        access_token = user_in_db["access_token"]
-        
-        # Call the core processing function
-        result = await _trigger_and_process_user_emails(user_id=user_id, access_token=access_token, max_results=payload.max_results)
-
-        if result["status"] == "error":
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=result["message"]
-            )
-        
-        return {
-            "success": True,
-            "message": result["message"],
-            "email_count": result["count"],
-            "user_email": user_email
-        }
-        
-    except HTTPException as e:
-        logger.error(f"HTTPException in fetch_user_emails_with_token: {e.detail}")
-        raise
-    except Exception as e:
-        logger.error(f"Error in fetch_user_emails_with_token: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to fetch emails: {str(e)}"
-        )
-
 @app.get("/me")
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """
@@ -433,19 +383,29 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             logger.info(f"User {user_id} has MongoDB emails but no Mem0 data - resetting sync flags to trigger Mem0 upload")
             await users_collection.update_one(
                 {"user_id": user_id},
-                {"$set": {"fetched_email": False, "initial_gmailData_sync": False}}
+                {"$set": {
+                    "fetched_email": False, 
+                    "initial_gmailData_sync": False,
+                    "financial_analysis_completed": False
+                }}
             )
             user_in_db["fetched_email"] = False
             user_in_db["initial_gmailData_sync"] = False
+            user_in_db["financial_analysis_completed"] = False
         # If user has no emails AND hasn't been marked as fetched, trigger background processing
         elif not has_email_data and not current_fetched_status:
             logger.info(f"User {user_id} needs email sync - marking fetched_email=false for background processing")
             await users_collection.update_one(
                 {"user_id": user_id},
-                {"$set": {"fetched_email": False, "initial_gmailData_sync": False}}
+                {"$set": {
+                    "fetched_email": False, 
+                    "initial_gmailData_sync": False,
+                    "financial_analysis_completed": False
+                }}
             )
             user_in_db["fetched_email"] = False
             user_in_db["initial_gmailData_sync"] = False
+            user_in_db["financial_analysis_completed"] = False
         elif has_email_data and has_mem0_data and not current_sync_status:
             # If both MongoDB and Mem0 have data but sync status is false, update it
             logger.info(f"User {user_id} has both email and Mem0 data - updating initial_gmailData_sync to true")
@@ -563,9 +523,15 @@ async def check_and_fetch_new_user_emails():
 
             logger.info(f"Background worker: Found user {user_id} with fetched_email=false. Triggering email processing.")
             
+            # Reset financial analysis status when starting new email fetch
+            await users_collection.update_one(
+                {"user_id": user_id},
+                {"$set": {"financial_analysis_completed": False}}
+            )
+            
             try:
                 # Process emails for this user
-                result = await _trigger_and_process_user_emails(user_id=user_id, access_token=access_token, max_results=2500)
+                result = await _trigger_and_process_user_emails(user_id=user_id, access_token=access_token, max_results=3500)
                 logger.info(f"Background worker: Email processing result for user {user_id}: {result}")
             except Exception as user_error:
                 logger.error(f"Background worker: Failed to process emails for user {user_id}: {str(user_error)}", exc_info=True)
@@ -584,12 +550,85 @@ async def check_and_fetch_new_user_emails():
     except Exception as e:
         logger.error(f"Background worker: Error during check_and_fetch_new_user_emails: {str(e)}", exc_info=True)
 
+async def check_and_process_financial_analysis():
+    """
+    Background worker to process financial analysis for users who have completed email sync
+    but haven't completed financial analysis yet.
+    """
+    logger.info("Financial worker: Checking for users needing financial analysis")
+    try:
+        # Find users who have completed email sync but not financial analysis
+        users_to_process = users_collection.find({
+            "initial_gmailData_sync": True,
+            "financial_analysis_completed": False
+        })
+        
+        users_found = 0
+        async for user in users_to_process:
+            users_found += 1
+            user_id = user.get("user_id")
+            
+            if not user_id:
+                logger.warning(f"Financial worker: Skipping user {user.get('_id')} due to missing user_id.")
+                continue
+
+            logger.info(f"Financial worker: Found user {user_id} needing financial analysis. Starting processing.")
+            
+            try:
+                # Import the fast processing logic
+                from app.fast_financial_processor import process_financial_transactions_from_mongodb
+                
+                # Process financial transactions with timeout
+                result = await asyncio.wait_for(
+                    process_financial_transactions_from_mongodb(user_id),
+                    timeout=EMAIL_PROCESSING_TIMEOUT
+                )
+                
+                if result["status"] == "success":
+                    logger.info(f"Financial worker: Successfully processed financial data for user {user_id}")
+                    logger.info(f"Financial worker: Found {result.get('transactions_found', 0)} transactions")
+                    
+                    # Update user status with detailed information
+                    await users_collection.update_one(
+                        {"user_id": user_id},
+                        {"$set": {
+                            "financial_analysis_completed": True,
+                            "financial_analysis_date": datetime.now().isoformat(),
+                            "financial_transactions_count": result.get('transactions_found', 0),
+                            "financial_processing_method": "fast_mongodb"
+                        }}
+                    )
+                else:
+                    logger.error(f"Financial worker: Failed to process financial data for user {user_id}: {result.get('error', 'Unknown error')}")
+                    
+            except asyncio.TimeoutError:
+                logger.error(f"Financial worker: Timeout processing financial data for user {user_id}")
+                # Don't reset the flag on timeout, let it retry later
+            except Exception as user_error:
+                logger.error(f"Financial worker: Failed to process financial data for user {user_id}: {str(user_error)}", exc_info=True)
+                # Don't reset the flag on error, let it retry later
+
+        if users_found == 0:
+            logger.info("Financial worker: No users found needing financial analysis")
+        else:
+            logger.info(f"Financial worker: Processed financial analysis for {users_found} users")
+            
+        logger.info("Financial worker: Finished checking for financial analysis.")
+    except Exception as e:
+        logger.error(f"Financial worker: Error during check_and_process_financial_analysis: {str(e)}", exc_info=True)
+
 @app.on_event("startup")
 async def startup_event():
-    # Schedule the job to run every 2 minutes
-    scheduler.add_job(check_and_fetch_new_user_emails, "interval", minutes=2, id="fetch_new_emails_job")
+    # Schedule the email fetching job to run every 30 seconds
+    scheduler.add_job(check_and_fetch_new_user_emails, "interval", seconds=30, id="fetch_new_emails_job")
+    
+    # Schedule the financial analysis job to run every 45 seconds (offset to avoid conflicts)
+    scheduler.add_job(check_and_process_financial_analysis, "interval", seconds=45, id="financial_analysis_job")
+    
     scheduler.start()
-    logger.info("APScheduler started. Job 'fetch_new_emails_job' scheduled every 2 minutes.")
+    logger.info("APScheduler started.")
+    logger.info("Job 'fetch_new_emails_job' scheduled every 30 seconds.")
+    logger.info("Job 'financial_analysis_job' scheduled every 45 seconds.")
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -634,7 +673,11 @@ async def trigger_email_sync_for_user(payload: dict):
         # Reset user status to trigger background processing
         await users_collection.update_one(
             {"user_id": user_id},
-            {"$set": {"fetched_email": False, "initial_gmailData_sync": False}}
+            {"$set": {
+                "fetched_email": False, 
+                "initial_gmailData_sync": False,
+                "financial_analysis_completed": False
+            }}
         )
         
         # Manually trigger the background worker
@@ -652,13 +695,105 @@ async def trigger_email_sync_for_user(payload: dict):
             detail=f"Failed to trigger email sync: {str(e)}"
         )
 
-# Add new Pydantic models for financial endpoints
+@app.post("/admin/trigger-financial-analysis")
+async def trigger_financial_analysis_for_user(payload: dict):
+    """
+    Manual trigger for financial analysis (for testing/debugging)
+    """
+    user_id = payload.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+    
+    logger.info(f"Manual trigger: Forcing financial analysis for user_id: {user_id}")
+    
+    try:
+        # Reset financial analysis status to trigger background processing
+        await users_collection.update_one(
+            {"user_id": user_id},
+            {"$set": {"financial_analysis_completed": False}}
+        )
+        
+        # Manually trigger the financial analysis worker
+        await check_and_process_financial_analysis()
+        
+        return {
+            "status": "success",
+            "message": f"Financial analysis triggered for user {user_id}",
+            "user_id": user_id
+        }
+    except Exception as e:
+        logger.error(f"Error in manual financial analysis trigger: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to trigger financial analysis: {str(e)}"
+        )
+
+# Pydantic models for financial endpoints
 class FinancialProcessingRequest(BaseModel):
     jwt_token: str
 
-class FinancialQueryRequest(BaseModel):
+class FastFinancialProcessingRequest(BaseModel):
     jwt_token: str
-    months: Optional[int] = 5
+
+@app.post("/financial/process-from-emails")
+async def process_financial_from_stored_emails(payload: FastFinancialProcessingRequest):
+    """
+    FAST Financial Processing - Process emails already stored in MongoDB
+    This is much faster than /financial/process as it doesn't fetch from Gmail API
+    
+    Usage: POST /financial/process-from-emails
+    Body: {"jwt_token": "your_jwt_token"}
+    
+    Returns: Processed financial transactions from existing emails
+    """
+    logger.info("Received request for FAST /financial/process-from-emails")
+    try:
+        # Authenticate user with JWT
+        user = decode_jwt_token(payload.jwt_token)
+        user_id = user.get("user_id")
+        user_email = user.get("email")
+        logger.info(f"JWT decoded. User ID: {user_id}, Email: {user_email}")
+        
+        # Use email processing context for resource management
+        async with email_processing_context(user_id) as rm:
+            # Import the fast processing logic
+            from app.fast_financial_processor import process_financial_transactions_from_mongodb
+            
+            # Process transactions from MongoDB emails with timeout
+            logger.info(f"Starting fast financial processing for user {user_id}")
+            result = await asyncio.wait_for(
+                process_financial_transactions_from_mongodb(user_id),
+                timeout=EMAIL_PROCESSING_TIMEOUT
+            )
+        
+        if result["status"] == "error":
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=result["error"]
+            )
+        
+            return {
+                "message": "Fast financial transaction processing completed successfully",
+                "processing_method": "mongodb_emails",
+                "speed": "fast",
+                "data": result
+            }
+        
+    except asyncio.TimeoutError:
+        logger.error(f"Fast financial processing timeout for user {user_id}")
+        raise HTTPException(
+            status_code=status.HTTP_408_REQUEST_TIMEOUT,
+            detail=f"Financial processing timed out after {EMAIL_PROCESSING_TIMEOUT} seconds"
+        )
+    except HTTPException as e:
+        logger.error(f"HTTPException in fast financial processing: {e.detail}")
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error in fast financial processing: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An unexpected error occurred during fast financial processing: {str(e)}"
+        )
 
 @app.post("/financial/process")
 async def process_financial_transactions(payload: FinancialProcessingRequest):
@@ -749,65 +884,106 @@ async def get_user_financial_summary(credentials: HTTPAuthorizationCredentials =
             detail=f"An unexpected error occurred: {str(e)}"
         )
 
-@app.get("/financial/transactions")
-async def get_user_financial_transactions(
-    limit: int = 100,
-    credentials: HTTPAuthorizationCredentials = Depends(security)
-):
+# Removed duplicate /financial/transactions endpoint - functionality available via /financial/transactions/all
+
+# Removed duplicate /financial/analyze endpoint - functionality available via /gmail/query with financial context
+
+@app.get("/financial/transactions/all")
+async def get_all_user_financial_transactions(jwt_token: str):
     """
-    Get financial transactions for authenticated user
-    Returns structured transaction data for visualization
+    GET endpoint to retrieve all financial transactions for a user
+    Takes JWT token as query parameter for Postman testing
+    
+    Usage: GET /financial/transactions/all?jwt_token=your_jwt_token_here
+    
+    Returns:
+    - All financial transactions (credit card, debit card, UPI, bank transfers, etc.)
+    - Comprehensive transaction data including merchant info, amounts, dates, categories
+    - Structured JSON format ready for analysis and visualization
     """
-    logger.info(f"Received request for /financial/transactions with limit: {limit}")
+    logger.info("Received GET request for /financial/transactions/all")
     try:
-        # Extract JWT token from Authorization header
-        token = credentials.credentials
-        user = decode_jwt_token(token)
+        # Authenticate user with JWT token from query parameter
+        logger.info("Decoding JWT token from query parameter...")
+        user = decode_jwt_token(jwt_token)
         user_id = user.get("user_id")
+        user_email = user.get("email")
+        logger.info(f"JWT decoded. User ID: {user_id}, Email: {user_email}")
+
+        # Get all financial transactions for this user (no limit)
+        logger.info(f"Fetching all financial transactions for user: {user_id}")
+        transactions = await get_financial_transactions(user_id, limit=10000)  # High limit to get all
         
-        # Get financial transactions
-        transactions = await get_financial_transactions(user_id, limit)
+        # Also get financial summary for additional insights
+        summary = await get_financial_summary(user_id)
         
-        return {
+        # Count transactions by type for quick overview
+        transaction_types = {}
+        payment_methods = {}
+        merchants = {}
+        total_amount = 0.0
+        
+        for txn in transactions:
+            # Count by transaction type
+            txn_type = txn.get('transaction_type', 'unknown')
+            transaction_types[txn_type] = transaction_types.get(txn_type, 0) + 1
+            
+            # Count by payment method
+            payment_method = txn.get('payment_method', 'unknown')
+            payment_methods[payment_method] = payment_methods.get(payment_method, 0) + 1
+            
+            # Count by merchant
+            merchant = txn.get('merchant', 'unknown')
+            merchants[merchant] = merchants.get(merchant, 0) + 1
+            
+            # Sum total amount
+            amount = txn.get('amount', 0)
+            if amount:
+                total_amount += float(amount)
+
+        # Prepare response with comprehensive data
+        response_data = {
             "status": "success",
-            "count": len(transactions),
-            "data": transactions
+            "user_info": {
+                "user_id": user_id,
+                "email": user_email
+            },
+            "transactions": {
+                "count": len(transactions),
+                "total_amount": round(total_amount, 2),
+                "data": transactions
+            },
+            "analytics": {
+                "transaction_types": transaction_types,
+                "payment_methods": payment_methods,
+                "top_merchants": dict(sorted(merchants.items(), key=lambda x: x[1], reverse=True)[:10]),
+                "summary": summary
+            },
+            "metadata": {
+                "extracted_at": datetime.now().isoformat(),
+                "data_includes": [
+                    "credit_card_transactions",
+                    "debit_card_transactions", 
+                    "upi_transactions",
+                    "bank_transfers",
+                    "online_payments",
+                    "subscription_payments",
+                    "refunds_and_cashbacks",
+                    "bill_payments",
+                    "investment_transactions"
+                ]
+            }
         }
+        
+        logger.info(f"Successfully retrieved {len(transactions)} financial transactions for user {user_id}")
+        return response_data
         
     except HTTPException as e:
-        logger.error(f"HTTPException in financial transactions: {e.detail}")
+        logger.error(f"HTTPException in get_all_user_financial_transactions: {e.detail}")
         raise
     except Exception as e:
-        logger.error(f"Unexpected error in financial transactions: {str(e)}", exc_info=True)
+        logger.error(f"Unexpected error in get_all_user_financial_transactions: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"An unexpected error occurred: {str(e)}"
-        )
-
-@app.post("/financial/analyze")
-async def analyze_financial_data(payload: TestMem0QueryPayload):
-    """
-    Analyze financial data with natural language queries
-    Uses existing Agno agents with enhanced financial focus
-    """
-    logger.info(f"Received financial analysis request for user_id: {payload.user_id} with query: {payload.query}")
-    try:
-        # Add financial context to the query
-        financial_query = f"Financial analysis: {payload.query}. Focus on transaction data, spending patterns, and financial insights."
-        
-        # Use the existing query_mem0 function with financial context
-        response = await query_mem0(user_id=payload.user_id, query=financial_query)
-        
-        return {
-            "status": "success",
-            "analysis": response,
-            "user_id": payload.user_id,
-            "query": payload.query,
-            "type": "financial_analysis"
-        }
-    except Exception as e:
-        logger.error(f"Error in financial analysis endpoint: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"An unexpected error occurred: {str(e)}"
+            detail=f"An unexpected error occurred while fetching financial transactions: {str(e)}"
         )

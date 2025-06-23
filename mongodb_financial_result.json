@@ -1,0 +1,37 @@
+{
+  "status": "success",
+  "user_id": "117694049755408407575",
+  "transactions_found": 34,
+  "total_amount": 41304.37,
+  "period": "all_available",
+  "summary": {
+    "user_id": "117694049755408407575",
+    "period": "all_available",
+    "total_transactions": 34,
+    "total_amount": 41304.37,
+    "average_transaction": 1214.834411764706,
+    "category_breakdown": {
+      "upi": 21668.0,
+      "bank_transfer": 5332.55,
+      "debit_card": 10497.019999999999,
+      "unknown": 3656.8,
+      "credit_card": 150.0
+    },
+    "merchant_breakdown": {
+      "HDFC Bank": 21818.0,
+      "Daily": 1382.55,
+      "Uber": 10457.019999999999,
+      "Hi": 2709.0,
+      "Yourstory": 2239.8,
+      "Google Pay": 1950.0,
+      "Community": 150.0,
+      "Delhivery": 200.0,
+      "Net": 180.0,
+      "Groww": 210.0,
+      "Getcopilotkit": 8.0
+    },
+    "monthly_trends": {},
+    "generated_at": "2025-06-23T15:01:15.473585",
+    "_id": "68591ee3cf0cefa4335d37c7"
+  }
+}
