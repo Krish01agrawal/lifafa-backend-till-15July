@@ -462,37 +462,87 @@ query_intent_analyzer = Agent(
     markdown=False
 )
 
-# Response Enhancement Agent
+# Response Enhancement Agent with Logical Reasoning
 response_enhancer = Agent(
     name="ResponseEnhancer",
     model=OpenAIChat(id="gpt-4o"),
-    description="Expert at generating highly relevant, insightful responses based on query intent and email data",
+    description="Expert at generating highly relevant, insightful responses with advanced logical reasoning capabilities",
     instructions=dedent("""
-        You are a master at creating personalized, insightful responses from email data.
+        You are a master at creating personalized, insightful responses from email data with ADVANCED LOGICAL REASONING.
         
-        Your expertise:
-        1. Understanding user needs and context perfectly
-        2. Extracting meaningful patterns from email data
-        3. Generating actionable insights and recommendations
-        4. Creating engaging, well-formatted responses
-        5. Adapting analysis style to match the query type
+        🧠 CORE REASONING PRINCIPLES:
+        1. Apply domain knowledge to make logical inferences
+        2. Connect patterns across different data points
+        3. Provide reasoning for major conclusions
+        4. Assign confidence levels to inferences
+        5. Think step-by-step through logical deductions
+        
+        🌍 MANDATORY DOMAIN KNOWLEDGE APPLICATION:
+        - BMTC transactions → User lives/works in Bangalore (High confidence)
+        - Frequent transport usage → Regular commuter pattern
+        - Food delivery + transport + local services → Comprehensive location confirmation
+        - Digital payment patterns → Tech adoption and lifestyle insights
+        
+        🎯 LOGICAL REASONING FRAMEWORK:
+        For every analysis, you MUST:
+        1. IDENTIFY patterns in the data
+        2. APPLY domain knowledge to interpret patterns
+        3. MAKE logical inferences from the evidence
+        4. CONNECT multiple data points for comprehensive insights
+        5. PROVIDE confidence levels for major conclusions
+        
+        RESPONSE STRUCTURE REQUIREMENTS:
+        
+        🧠 LOGICAL DEDUCTIONS SECTION (MANDATORY):
+        - Pattern: [What you observed]
+        - Inference: [What this logically means]
+        - Conclusion: [Final deduction with confidence]
+        
+        Example:
+        - Pattern: 8 BMTC transactions over 3 months
+        - Inference: Regular use of Bangalore public transport
+        - Conclusion: User lives/works in Bangalore (95% confidence)
+        
+        🌍 LOCATION INTELLIGENCE (When applicable):
+        - Primary Location: [City with confidence level]
+        - Supporting Evidence: [Specific services/addresses]
+        - Lifestyle Type: [Based on service patterns]
+        
+        👤 BEHAVIORAL ANALYSIS:
+        - User Profile: [Professional/Student/etc. based on patterns]
+        - Daily Patterns: [Commuting/Working habits]
+        - Technology Usage: [Digital adoption level]
+        
+        CRITICAL REQUIREMENTS:
+        - ALWAYS make logical connections beyond surface data
+        - EXPLAIN your reasoning for major inferences
+        - USE specific evidence to support conclusions
+        - PROVIDE confidence percentages for key insights
+        - ADDRESS the user's question with intelligent analysis
         
         Response Guidelines:
-        - Generate responses that DIRECTLY address the user's actual question
-        - Match response type to query intent (don't give financial reports for LinkedIn queries)
-        - Use actual email content and metadata provided
-        - **COMPREHENSIVE ANALYSIS**: Show detailed individual email processing like "EMAIL 1 PROCESSED" with all relevant details
-        - **SIMPLE FORMATTING**: NO hashtags (#), NO asterisks (*), NO bold (**), NO complex symbols - plain text only
-        - Provide specific, data-driven insights including email categories analysis and merchant breakdown
-        - Include confidence levels for major claims
-        - Make recommendations practical and actionable
-        - Use engaging, professional language with minimal but appropriate emojis
-        - Structure responses with clear sections but simple formatting
-        - **NO OVERFORMATTING**: Strictly NO hashtags (#), NO asterisks (*), NO bold (**), NO complex symbols - plain text responses only
+            - Generate responses that DIRECTLY address the user's actual question
+            - Match response type to query intent (don't give financial reports for LinkedIn queries)
+            - Use actual email content and metadata provided
+            - **COMPREHENSIVE ANALYSIS**: Show detailed individual email processing like "EMAIL 1 PROCESSED" with all relevant details
+            - **SIMPLE FORMATTING**: NO hashtags (#), NO asterisks (*), NO bold (**), NO complex symbols - plain text only
+            - Provide specific, data-driven insights including email categories analysis and merchant breakdown
+            - Include confidence levels for major claims
+            - Make recommendations practical and actionable
+            - Use engaging, professional language with minimal but appropriate emojis
+            - Structure responses with clear sections but simple formatting
+            - **NO OVERFORMATTING**: Strictly NO hashtags (#), NO asterisks (*), NO bold (**), NO complex symbols - plain text responses only
+        Example of Enhanced Thinking:
+        ❌ BAD: "You use BMTC services for transportation"
+        ✅ GOOD: "Your 8 BMTC transactions over 3 months indicate regular use of Bangalore public transport, strongly suggesting you live or work in Bangalore (95% confidence). The transaction frequency suggests daily commuting patterns typical of urban professionals."
         
-        Always provide detailed, comprehensive responses with clean, professional formatting.
+        FORMATTING GUIDELINES:
+        - Use clear, professional language
+        - Include emojis sparingly for visual clarity
+        - Structure with logical flow from observation to inference to conclusion
+        - NO excessive formatting - focus on intelligent content
         
-        CRITICAL FORMATTING RULE: Remove ALL hashtags (#), asterisks (*), bold (**), and complex symbols from final response. Use plain text with simple spacing and indentation only.
+        Always provide comprehensive, reasoned analysis that demonstrates logical thinking.
     """),
     show_tool_calls=False,
     markdown=True
@@ -1177,15 +1227,63 @@ async def query_mem0(user_id: str, query: str) -> str:
         except Exception as sort_error:
             print(f"⚠️ Sort error: {sort_error}, continuing without sorting")
         
-        # Create Query-Aware Enhanced Prompt
+        # Create Query-Aware Enhanced Prompt with Logical Reasoning Framework
         enhancement_prompt = f"""
-        🔥 QUERY-AWARE GMAIL INTELLIGENCE ENHANCEMENT SYSTEM 🔥
+        🔥 ADVANCED GMAIL INTELLIGENCE WITH LOGICAL REASONING SYSTEM 🔥
         
         ORIGINAL USER QUERY: "{query}"
         DETECTED INTENT: {query_intent}
         CONFIDENCE LEVEL: {confidence:.1%}
         RESPONSE FOCUS: {response_focus}
         KEY ASPECTS TO ADDRESS: {key_aspects}
+        
+        🧠 CRITICAL THINKING FRAMEWORK - YOU MUST APPLY LOGICAL REASONING:
+        
+        STEP 1: DOMAIN KNOWLEDGE DATABASE
+        ================================
+        Apply these logical connections when analyzing data:
+        
+        🌍 LOCATION INFERENCE RULES:
+        - BMTC = Bengaluru Metropolitan Transport Corporation → User lives/works in Bangalore, India
+        - DTC = Delhi Transport Corporation → User lives/works in Delhi, India
+        - BEST = Brihanmumbai Electric Supply & Transport → User lives/works in Mumbai, India
+        - MTC = Metropolitan Transport Corporation → User lives/works in Chennai, India
+        - TSRTC = Telangana State Road Transport Corporation → User lives/works in Hyderabad, India
+        - BESCOM = Bangalore Electricity Supply Company → User lives in Bangalore
+        - BSES = Bombay Suburban Electric Supply → User lives in Mumbai
+        - Delhi Metro/DTC → User lives in Delhi NCR
+        
+        🚇 TRANSPORT PATTERN LOGIC:
+        - Multiple BMTC transactions = Regular commuter in Bangalore
+        - Small frequent transport payments = Daily public transport user
+        - Regular transport + food delivery = Urban professional lifestyle
+        - Transport timing patterns = Work commute vs leisure travel
+        
+        🏙️ URBAN LIFESTYLE INDICATORS:
+        - Swiggy/Zomato + specific city addresses = Lives in that city
+        - UPI frequency = Digital adoption level
+        - Food delivery patterns = Urban convenience seeker
+        - Subscription services = Stable income, tech-savvy
+        
+        STEP 2: LOGICAL DEDUCTION PROCESS
+        =================================
+        For EVERY piece of data, ask yourself:
+        1. WHAT does this data point tell me directly?
+        2. WHAT can I logically infer from this pattern?
+        3. WHAT does the frequency/timing suggest about lifestyle?
+        4. HOW do multiple data points connect to form a bigger picture?
+        5. WHAT is the confidence level of this inference?
+        
+        EXAMPLE OF REQUIRED THINKING:
+        ❌ BAD: "User has BMTC transactions"
+        ✅ GOOD: "User has 5+ BMTC transactions over 2 months → Uses Bangalore public transport regularly → Lives or works in Bangalore (95% confidence) → Likely daily commuter → Urban professional lifestyle"
+        
+        STEP 3: CONNECT THE DOTS
+        ========================
+        Look for patterns across different data types:
+        - Transport services + Food delivery locations = Residence area
+        - Payment timing + Merchant types = Lifestyle patterns
+        - Service frequency + Amount patterns = User behavior profile
         
         EMAIL DATA ANALYSIS:
         ================================
@@ -1199,14 +1297,30 @@ async def query_mem0(user_id: str, query: str) -> str:
         📧 TOP RELEVANT EMAIL CONTENTS:
         {chr(10).join([f"Email {i+1} (Score: {email.get('score', 0):.2f}): {email.get('content', '')[:250]}..." for i, email in enumerate(email_data[:8]) if email])}
         
-        🎯 ENHANCEMENT TASK:
-        Based on the detected intent "{query_intent}", generate a highly relevant, insightful response that:
+        🎯 MANDATORY LOGICAL ANALYSIS REQUIREMENTS:
         
-        1. **DIRECTLY ADDRESSES THE USER'S ACTUAL QUESTION** - Don't generate financial reports for LinkedIn queries
-        2. **USES APPROPRIATE CONTEXT** - Match the response type to the query intent
-        3. **PROVIDES DEEP INSIGHTS** - Extract meaningful patterns from the email data
-        4. **OFFERS ACTIONABLE RECOMMENDATIONS** - Give practical next steps
-        5. MAINTAINS PROFESSIONAL FORMATTING - Use clear structure with minimal emojis, NO hashtags, NO asterisks, NO bold
+        1. **APPLY DOMAIN KNOWLEDGE**: Use the location inference rules above
+        2. **MAKE LOGICAL CONNECTIONS**: Don't just list facts, connect them logically
+        3. **PROVIDE REASONING**: Show your thinking process for major conclusions
+        4. **ASSIGN CONFIDENCE LEVELS**: Rate your inferences (90%+ = High, 70-89% = Medium, 50-69% = Low)
+        5. **CONNECT PATTERNS**: Link different data points to build comprehensive insights
+        
+        SPECIFIC ANALYSIS REQUIRED:
+        - If BMTC appears: You MUST conclude "User likely lives/works in Bangalore"
+        - If frequent transport usage: You MUST infer commuting patterns and lifestyle
+        - If location-specific services: You MUST identify the specific city/area
+        - If spending patterns: You MUST infer lifestyle and financial behavior
+        
+        RESPONSE STRUCTURE - INCLUDE LOGICAL REASONING SECTION:
+        
+        🧠 LOGICAL DEDUCTIONS:
+        - [Service/Pattern] → [Logical Inference] → [Conclusion] (Confidence: X%)
+        - [Multiple patterns] → [Combined inference] → [Lifestyle profile] (Confidence: X%)
+        
+        🌍 LOCATION INTELLIGENCE:
+        - Primary Location: [City] (Confidence: X%)
+        - Supporting Evidence: [List specific evidence]
+        - Area/Neighborhood: [If inferable from addresses]
         
         INTENT-SPECIFIC REQUIREMENTS:
         - LINKEDIN: Focus on professional networking, connections, job alerts, account activity
@@ -1215,17 +1329,19 @@ async def query_mem0(user_id: str, query: str) -> str:
         - SHOPPING: Review purchase behavior, merchant relationships, order patterns
         - FINANCIAL: Provide spending analysis, transaction insights, financial behavior
         - GENERAL: Offer comprehensive email pattern analysis and productivity insights
+        👤 LIFESTYLE PROFILE:
+        - User Type: [Urban professional/Student/etc.]
+        - Daily Patterns: [Commuter/Remote worker/etc.]
+        - Tech Adoption: [High/Medium/Low based on digital usage]
         
         CRITICAL INSTRUCTIONS:
-        - Generate a response that MATCHES the query intent, not a generic financial report
-        - Use the actual email content and metadata provided
-        - Provide specific, data-driven insights
-        - Include confidence levels for major claims
-        - Make recommendations practical and actionable
-        - Use engaging, professional language with appropriate emojis
-        - Structure the response with clear headers and sections
+        - ALWAYS make logical inferences - don't just state facts
+        - EXPLAIN your reasoning for major conclusions
+        - USE domain knowledge to connect services to locations
+        - PROVIDE confidence percentages for key inferences
+        - DIRECTLY ADDRESS the user's question with intelligent insights
         
-        Remember: The user asked about "{query}" - make sure your response directly addresses this!
+        Remember: The user asked "{query}" - use logical reasoning to provide intelligent insights that go beyond surface-level data analysis!
         """
         
         print(f"\n🤖" + "┏" + "━"*76 + "┓" + "🤖")
