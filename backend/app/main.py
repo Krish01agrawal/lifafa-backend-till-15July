@@ -1,6 +1,6 @@
 import os
 from dotenv import load_dotenv
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 # Determine the path to the .env file (two levels up from this file)
@@ -986,4 +986,165 @@ async def get_all_user_financial_transactions(jwt_token: str):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An unexpected error occurred while fetching financial transactions: {str(e)}"
+        )
+
+@app.get("/financial/transactions/enhanced")
+async def get_enhanced_financial_transactions(jwt_token: str):
+    """
+    ENHANCED endpoint to retrieve all financial transactions with comprehensive details
+    
+    Returns:
+    - Proper transaction IDs (not generic keywords)
+    - Bank account details (masked account numbers, bank names, account holder names)
+    - UPI transaction details (UPI IDs, app names, receiver names)
+    - Card transaction details (masked card numbers, card types, bank names)
+    - Complete transaction metadata
+    
+    Usage: GET /financial/transactions/enhanced?jwt_token=your_jwt_token_here
+    """
+    logger.info("Received GET request for /financial/transactions/enhanced")
+    try:
+        # Authenticate user with JWT token
+        user = decode_jwt_token(jwt_token)
+        user_id = user.get("user_id")
+        user_email = user.get("email")
+        logger.info(f"JWT decoded. User ID: {user_id}, Email: {user_email}")
+
+        # Process transactions with enhanced extractor
+        from app.fast_financial_processor import EnhancedTransactionExtractor
+        
+        # Get all emails for the user
+        cursor = emails_collection.find({"user_id": user_id})
+        all_emails = await cursor.to_list(length=None)
+        
+        logger.info(f"Found {len(all_emails)} total emails in MongoDB")
+        
+        # Extract enhanced financial transactions
+        extractor = EnhancedTransactionExtractor()
+        enhanced_transactions = []
+        transactions_without_ids = []
+        
+        for email in all_emails:
+            if extractor.is_financial_email(email):
+                transaction = extractor.extract_transaction(email, user_id)
+                if transaction:
+                    if transaction.get('transaction_id'):
+                        enhanced_transactions.append(transaction)
+                    else:
+                        # Include transactions without IDs but mark them separately
+                        transaction['transaction_id'] = f"NO_ID_{transaction['id'][-8:]}"
+                        transaction['id_type'] = 'generated'
+                        transactions_without_ids.append(transaction)
+        
+        # Combine all transactions (prioritize those with proper IDs)
+        all_enhanced_transactions = enhanced_transactions + transactions_without_ids
+        
+        logger.info(f"Extracted {len(enhanced_transactions)} transactions with proper IDs and {len(transactions_without_ids)} without IDs")
+
+        # Calculate analytics
+        total_amount = sum(t['amount'] for t in all_enhanced_transactions if t['amount'])
+        
+        # Enhanced analytics with detailed breakdowns
+        transaction_types = {}
+        payment_methods = {}
+        merchants = {}
+        banks = {}
+        upi_apps = {}
+        
+        for txn in all_enhanced_transactions:
+            # Transaction types
+            txn_type = txn.get('transaction_type', 'unknown')
+            transaction_types[txn_type] = transaction_types.get(txn_type, 0) + 1
+            
+            # Payment methods  
+            payment_method = txn.get('payment_method', 'unknown')
+            payment_methods[payment_method] = payment_methods.get(payment_method, 0) + 1
+            
+            # Merchants
+            merchant = txn.get('merchant', 'unknown')
+            merchants[merchant] = merchants.get(merchant, 0) + 1
+            
+            # Banks
+            bank_name = txn.get('bank_details', {}).get('bank_name')
+            if bank_name:
+                banks[bank_name] = banks.get(bank_name, 0) + 1
+            
+            # UPI Apps
+            upi_app = txn.get('upi_details', {}).get('app_name')
+            if upi_app:
+                upi_apps[upi_app] = upi_apps.get(upi_app, 0) + 1
+
+        # Create comprehensive response
+        response_data = {
+            "status": "success",
+            "user_info": {
+                "user_id": user_id,
+                "email": user_email
+            },
+            "transactions": {
+                "count": len(all_enhanced_transactions),
+                "total_amount": round(total_amount, 2),
+                "data": all_enhanced_transactions
+            },
+            "enhanced_analytics": {
+                "transaction_types": transaction_types,
+                "payment_methods": payment_methods,
+                "top_merchants": dict(sorted(merchants.items(), key=lambda x: x[1], reverse=True)[:10]),
+                "banks_used": banks,
+                "upi_apps_used": upi_apps,
+                "summary": {
+                    "user_id": user_id,
+                    "period": "all_stored_emails",
+                    "total_transactions": len(all_enhanced_transactions),
+                    "total_amount": total_amount,
+                    "average_transaction": total_amount / len(all_enhanced_transactions) if all_enhanced_transactions else 0,
+                    "merchant_breakdown": dict(sorted(merchants.items(), key=lambda x: x[1], reverse=True)),
+                    "payment_method_breakdown": payment_methods,
+                    "transaction_type_breakdown": transaction_types,
+                    "generated_at": datetime.now().isoformat()
+                }
+            },
+            "data_quality": {
+                "transactions_with_proper_ids": len(enhanced_transactions),
+                "transactions_with_generated_ids": len(transactions_without_ids),
+                "total_transactions": len(all_enhanced_transactions),
+                "transactions_with_bank_details": len([t for t in all_enhanced_transactions if t.get('bank_details', {}).get('bank_name')]),
+                "transactions_with_upi_details": len([t for t in all_enhanced_transactions if t.get('upi_details')]),
+                "transactions_with_card_details": len([t for t in all_enhanced_transactions if t.get('card_details')]),
+                "extraction_method": "enhanced_regex_patterns",
+                "validation_applied": "includes_subscription_transactions"
+            },
+            "metadata": {
+                "extracted_at": datetime.now().isoformat(),
+                "extraction_improvements": [
+                    "proper_transaction_id_extraction",
+                    "bank_account_details_extraction", 
+                    "upi_id_and_app_detection",
+                    "card_details_extraction",
+                    "merchant_name_enhancement",
+                    "payment_method_classification"
+                ],
+                "data_includes": [
+                    "bank_account_numbers_masked",
+                    "bank_names",
+                    "account_holder_names_where_available",
+                    "transaction_ids_validated", 
+                    "upi_transaction_ids",
+                    "upi_virtual_payment_addresses",
+                    "upi_app_names",
+                    "card_numbers_masked",
+                    "card_types_detected",
+                    "enhanced_merchant_detection"
+                ]
+            }
+        }
+        
+        logger.info(f"Successfully retrieved {len(all_enhanced_transactions)} enhanced financial transactions")
+        return response_data
+        
+    except Exception as e:
+        logger.error(f"Error in get_enhanced_financial_transactions: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An unexpected error occurred: {str(e)}"
         )
