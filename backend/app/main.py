@@ -32,6 +32,7 @@ from app.financial_agent import (
     get_financial_summary,
     get_financial_transactions
 )
+
 # Import scalability components
 from app.config import CONFIG, EMAIL_PROCESSING_TIMEOUT, CONCURRENT_USERS_LIMIT
 from app.middleware import (
