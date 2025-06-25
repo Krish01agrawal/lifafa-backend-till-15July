@@ -15,13 +15,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 # from app.auth import verify_google_token, create_jwt_token, decode_jwt_token
 from .auth import verify_google_token, create_jwt_token, decode_jwt_token
-from app.oauth import generate_auth_url, exchange_code_for_tokens
-from app.db import users_collection, emails_collection
-from app.gmail import build_gmail_service, fetch_emails
-from app.mem0_agent_agno import upload_emails_to_mem0, query_mem0, process_gmail_data_for_user, search_emails_in_mem0
-from app.models import GoogleToken, GmailFetchPayload
-from app.websocket import router as websocket_router
-from app.websocket import manager
+# from app.oauth import generate_auth_url, exchange_code_for_tokens
+from .oauth import generate_auth_url, exchange_code_for_tokens
+from .db import users_collection, emails_collection
+from .gmail import build_gmail_service, fetch_emails
+from .mem0_agent_agno import upload_emails_to_mem0, query_mem0, process_gmail_data_for_user, search_emails_in_mem0
+from .models import GoogleToken, GmailFetchPayload
+from .websocket import router as websocket_router
+from .websocket import manager
 import logging
 import asyncio
 from bson import ObjectId
@@ -34,8 +35,8 @@ from app.financial_agent import (
 )
 
 # Import scalability components
-from app.config import CONFIG, EMAIL_PROCESSING_TIMEOUT, CONCURRENT_USERS_LIMIT
-from app.middleware import (
+from .config import CONFIG, EMAIL_PROCESSING_TIMEOUT, CONCURRENT_USERS_LIMIT
+from .middleware import (
     rate_limit_middleware, email_processing_context, 
     get_health_status, resource_manager
 )
