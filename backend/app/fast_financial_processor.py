@@ -9,7 +9,7 @@ for use in FastAPI endpoints. Much faster than Gmail API processing.
 import re
 from datetime import datetime
 from typing import List, Dict, Optional, Any
-from app.db import emails_collection, users_collection, db
+from .db import emails_collection, users_collection, db
 import logging
 
 logger = logging.getLogger(__name__)

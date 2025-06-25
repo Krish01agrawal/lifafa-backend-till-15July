@@ -3,8 +3,8 @@ import json
 import logging
 import uuid
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from app.mem0_agent_agno import query_mem0
-from app.auth import decode_jwt_token_websocket
+from .mem0_agent_agno import query_mem0
+from .auth import decode_jwt_token_websocket
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
