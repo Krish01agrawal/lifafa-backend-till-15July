@@ -6,7 +6,7 @@ Ensures proper WebSocket configuration for EC2 deployment
 
 import uvicorn
 import os
-from app.main import app
+from .main import app
 
 def main():
     """Start the production server with WebSocket support"""

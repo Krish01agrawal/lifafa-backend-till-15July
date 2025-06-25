@@ -24,10 +24,10 @@ from pydantic import BaseModel, Field
 import logging
 
 # Core imports from existing system
-from app.mem0_agent_agno import EmailMessage
-from app.gmail import build_gmail_service
-from app.db import users_collection, emails_collection
-from app.models import GoogleToken
+from .mem0_agent_agno import EmailMessage
+from .gmail import build_gmail_service
+from .db import users_collection, emails_collection
+from .models import GoogleToken
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
