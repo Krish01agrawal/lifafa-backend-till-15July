@@ -13,7 +13,8 @@ from fastapi import FastAPI, Depends, HTTPException, status, Request, Header
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
-from app.auth import verify_google_token, create_jwt_token, decode_jwt_token
+# from app.auth import verify_google_token, create_jwt_token, decode_jwt_token
+from .auth import verify_google_token, create_jwt_token, decode_jwt_token
 from app.oauth import generate_auth_url, exchange_code_for_tokens
 from app.db import users_collection, emails_collection
 from app.gmail import build_gmail_service, fetch_emails
@@ -31,7 +32,6 @@ from app.financial_agent import (
     get_financial_summary,
     get_financial_transactions
 )
-
 # Import scalability components
 from app.config import CONFIG, EMAIL_PROCESSING_TIMEOUT, CONCURRENT_USERS_LIMIT
 from app.middleware import (
