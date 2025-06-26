@@ -59,8 +59,9 @@ def build_gmail_service(access_token: str, refresh_token: str = None, client_id:
     )
     
     logger.info(f"🔄 Credentials created, building Gmail service...")
-    service = build('gmail', 'v1', credentials=creds)
-    logger.info(f"✅ Gmail service built successfully")
+    # Disable discovery cache to prevent memory issues
+    service = build('gmail', 'v1', credentials=creds, cache_discovery=False)
+    logger.info(f"✅ Gmail service built successfully (cache disabled)")
     return service
 
 # ============================================================================
@@ -934,3 +935,339 @@ logger.info(f"   📊 Email limit per user: {DEFAULT_EMAIL_LIMIT}")
 logger.info(f"   ⏰ Retention period: {EMAIL_TIME_RANGE_DAYS} days (6 months)")
 logger.info(f"   🗜️ Smart filtering enabled: {ENABLE_SMART_EMAIL_FILTERING}")
 logger.info(f"   💾 Body storage: {'Enabled' if PRESERVE_EMAIL_BODY else 'Disabled'}")
+
+# ============================================================================
+# PROGRESSIVE EMAIL LOADING FUNCTIONS
+# ============================================================================
+
+async def fetch_gmail_emails_by_days(service, user_id: str, days: int = 7, max_results: int = 500) -> List[Dict]:
+    """
+    Fetch recent emails for immediate dashboard access (progressive loading)
+    
+    Args:
+        service: Gmail service instance
+        user_id: User ID
+        days: Number of recent days to fetch (default: 7)
+        max_results: Maximum emails to fetch (default: 500)
+    
+    Returns:
+        List of email dictionaries
+    """
+    logger.info(f"🚀 [IMMEDIATE] Fetching {days}-day recent emails for user {user_id} (limit: {max_results})")
+    
+    try:
+        # Calculate date range for recent emails
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=days)
+        
+        # Create Gmail query for recent emails
+        query = f"after:{start_date.strftime('%Y/%m/%d')} before:{end_date.strftime('%Y/%m/%d')}"
+        
+        logger.info(f"🔍 [IMMEDIATE] Gmail query: {query}")
+        
+        # Fetch emails using existing optimized function
+        all_messages = []
+        page_token = None
+        fetched_count = 0
+        
+        while fetched_count < max_results:
+            try:
+                # Fetch page of message IDs
+                result = service.users().messages().list(
+                    userId=user_id,
+                    q=query,
+                    maxResults=min(100, max_results - fetched_count),
+                    pageToken=page_token
+                ).execute()
+                
+                messages = result.get('messages', [])
+                if not messages:
+                    break
+                
+                all_messages.extend(messages)
+                fetched_count += len(messages)
+                
+                logger.info(f"📧 [IMMEDIATE] Fetched {len(messages)} message IDs, total: {fetched_count}")
+                
+                # Check for next page
+                page_token = result.get('nextPageToken')
+                if not page_token:
+                    break
+                    
+            except Exception as e:
+                logger.error(f"❌ [IMMEDIATE] Error fetching message IDs: {e}")
+                break
+        
+        if not all_messages:
+            logger.info(f"📭 [IMMEDIATE] No emails found for {days} days")
+            return []
+        
+        # Fetch detailed email content
+        logger.info(f"📧 [IMMEDIATE] Fetching detailed content for {len(all_messages)} emails")
+        
+        detailed_emails = []
+        batch_size = 20  # Smaller batches for faster response
+        
+        for i in range(0, len(all_messages), batch_size):
+            batch = all_messages[i:i + batch_size]
+            batch_emails = await fetch_email_batch_details(service, user_id, batch)
+            detailed_emails.extend(batch_emails)
+            
+            logger.info(f"✅ [IMMEDIATE] Processed batch {i//batch_size + 1}/{(len(all_messages) + batch_size - 1)//batch_size}")
+        
+        logger.info(f"🎉 [IMMEDIATE] Successfully fetched {len(detailed_emails)} recent emails")
+        return detailed_emails
+        
+    except Exception as e:
+        logger.error(f"❌ [IMMEDIATE] Error fetching recent emails: {e}")
+        return []
+
+async def fetch_gmail_emails_historical(service, user_id: str, months: int = 6, exclude_recent_days: int = 7, max_results: int = 5000) -> List[Dict]:
+    """
+    Fetch historical emails for background processing (progressive loading)
+    
+    Args:
+        service: Gmail service instance
+        user_id: User ID
+        months: Number of months to go back (default: 6)
+        exclude_recent_days: Days to exclude from the beginning (default: 7)
+        max_results: Maximum emails to fetch (default: 5000)
+    
+    Returns:
+        List of email dictionaries
+    """
+    logger.info(f"🔄 [BACKGROUND] Fetching {months}-month historical emails for user {user_id} (limit: {max_results})")
+    
+    try:
+        # Calculate date range for historical emails (exclude recent days already processed)
+        end_date = datetime.now() - timedelta(days=exclude_recent_days)
+        start_date = end_date - timedelta(days=months * 30)  # Approximate months to days
+        
+        # Create Gmail query for historical emails
+        query = f"after:{start_date.strftime('%Y/%m/%d')} before:{end_date.strftime('%Y/%m/%d')}"
+        
+        logger.info(f"🔍 [BACKGROUND] Gmail query: {query}")
+        logger.info(f"📅 [BACKGROUND] Date range: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
+        
+        # Fetch emails using existing optimized function
+        all_messages = []
+        page_token = None
+        fetched_count = 0
+        
+        while fetched_count < max_results:
+            try:
+                # Fetch page of message IDs
+                result = service.users().messages().list(
+                    userId=user_id,
+                    q=query,
+                    maxResults=min(100, max_results - fetched_count),
+                    pageToken=page_token
+                ).execute()
+                
+                messages = result.get('messages', [])
+                if not messages:
+                    break
+                
+                all_messages.extend(messages)
+                fetched_count += len(messages)
+                
+                logger.info(f"📧 [BACKGROUND] Fetched {len(messages)} message IDs, total: {fetched_count}")
+                
+                # Check for next page
+                page_token = result.get('nextPageToken')
+                if not page_token:
+                    break
+                    
+            except Exception as e:
+                logger.error(f"❌ [BACKGROUND] Error fetching message IDs: {e}")
+                break
+        
+        if not all_messages:
+            logger.info(f"📭 [BACKGROUND] No historical emails found for {months} months")
+            return []
+        
+        # Fetch detailed email content in larger batches (background processing can be slower)
+        logger.info(f"📧 [BACKGROUND] Fetching detailed content for {len(all_messages)} historical emails")
+        
+        detailed_emails = []
+        batch_size = 50  # Larger batches for background processing
+        
+        for i in range(0, len(all_messages), batch_size):
+            batch = all_messages[i:i + batch_size]
+            batch_emails = await fetch_email_batch_details(service, user_id, batch)
+            detailed_emails.extend(batch_emails)
+            
+            # Progress logging for background processing
+            progress = ((i + batch_size) / len(all_messages)) * 100
+            logger.info(f"🔄 [BACKGROUND] Progress: {progress:.1f}% ({i + len(batch)}/{len(all_messages)} emails)")
+            
+            # Console progress for user feedback
+            if i % (batch_size * 4) == 0:  # Every 4 batches
+                print(f"🔄 Background sync progress: {progress:.1f}% ({i + len(batch)}/{len(all_messages)} historical emails)")
+        
+        logger.info(f"🎉 [BACKGROUND] Successfully fetched {len(detailed_emails)} historical emails")
+        return detailed_emails
+        
+    except Exception as e:
+        logger.error(f"❌ [BACKGROUND] Error fetching historical emails: {e}")
+        return []
+
+async def fetch_email_batch_details(service, user_id: str, message_batch: List[Dict]) -> List[Dict]:
+    """
+    Fetch detailed email content for a batch of message IDs (MEMORY-SAFE VERSION)
+    
+    Args:
+        service: Gmail service instance
+        user_id: User ID
+        message_batch: List of message dictionaries with IDs
+    
+    Returns:
+        List of detailed email dictionaries
+    """
+    detailed_emails = []
+    
+    try:
+        logger.info(f"🔄 [BATCH] Processing {len(message_batch)} emails sequentially (memory-safe)")
+        
+        # Process emails SEQUENTIALLY to avoid memory conflicts
+        for i, msg in enumerate(message_batch):
+            try:
+                # Add small delay to prevent API rate limiting and memory pressure
+                if i > 0 and i % 5 == 0:
+                    await asyncio.sleep(0.1)
+                
+                # Fetch detailed email content synchronously (safer)
+                email_detail = service.users().messages().get(userId=user_id, id=msg['id']).execute()
+                
+                # Extract complete email data
+                email_data = email_extractor.extract_complete_email_data(email_detail)
+                detailed_emails.append(email_data)
+                
+                # Log progress every 5 emails
+                if (i + 1) % 5 == 0:
+                    logger.info(f"📧 [BATCH] Processed {i + 1}/{len(message_batch)} emails")
+                
+                # Force garbage collection every 10 emails to prevent memory buildup
+                if (i + 1) % 10 == 0:
+                    import gc
+                    gc.collect()
+                
+            except Exception as e:
+                logger.error(f"❌ [BATCH] Error fetching email {msg.get('id', 'unknown')}: {e}")
+                continue
+        
+        logger.info(f"✅ [BATCH] Successfully processed {len(detailed_emails)}/{len(message_batch)} emails")
+        
+    except Exception as e:
+        logger.error(f"❌ [BATCH] Critical error in batch email fetch: {e}")
+        import traceback
+        logger.error(f"❌ [BATCH] Traceback: {traceback.format_exc()}")
+    
+    return detailed_emails
+
+# ============================================================================
+# PROGRESSIVE EMAIL PROCESSING
+# ============================================================================
+
+async def process_and_store_emails(user_id: str, emails: List[Dict], is_immediate: bool = False, is_historical: bool = False) -> Dict[str, Any]:
+    """
+    Enhanced email processing with progressive loading support
+    
+    Args:
+        user_id: User ID
+        emails: List of email dictionaries
+        is_immediate: True if processing recent emails for immediate access
+        is_historical: True if processing historical emails in background
+    
+    Returns:
+        Processing result dictionary
+    """
+    processing_type = "immediate" if is_immediate else ("historical" if is_historical else "standard")
+    logger.info(f"🔄 [{processing_type.upper()}] Processing {len(emails)} emails for user {user_id}")
+    
+    try:
+        # Apply smart email filtering
+        if ENABLE_SMART_EMAIL_FILTERING:
+            filtered_emails = await email_filter.smart_filter_emails(emails, user_id, processing_type)
+            logger.info(f"📊 [{processing_type.upper()}] Smart filtering: {len(emails)} → {len(filtered_emails)} emails")
+        else:
+            filtered_emails = emails
+        
+        if not filtered_emails:
+            logger.info(f"📭 [{processing_type.upper()}] No emails to process after filtering")
+            return {
+                "success": True,
+                "status": "success",
+                "emails_stored": 0,
+                "promotional_filtered": len(emails),
+                "processing_type": processing_type
+            }
+        
+        # Store emails in database
+        storage_result = await insert_filtered_emails(user_id, filtered_emails, processing_type)
+        
+        if storage_result.get("success", False):
+            stored_count = storage_result.get("inserted", 0)
+            logger.info(f"✅ [{processing_type.upper()}] Successfully stored {stored_count} emails")
+            
+            # Upload to Mem0 for AI processing
+            if stored_count > 0:
+                from .mem0_agent_agno import upload_emails_to_mem0, EmailMessage
+                
+                # Convert to EmailMessage objects
+                email_messages = []
+                for email in filtered_emails[:stored_count]:  # Only process stored emails
+                    try:
+                        # Handle date conversion properly
+                        date_value = email.get("date", "")
+                        if hasattr(date_value, 'isoformat'):  # It's a datetime object
+                            date_str = date_value.isoformat()
+                        elif isinstance(date_value, str):
+                            date_str = date_value
+                        else:
+                            date_str = str(date_value) if date_value else ""
+                        
+                        email_msg = EmailMessage(
+                            id=email.get("id", ""),
+                            subject=email.get("subject", ""),
+                            sender=email.get("sender", ""),
+                            snippet=email.get("snippet", ""),
+                            body=email.get("body", ""),
+                            date=date_str
+                        )
+                        email_messages.append(email_msg)
+                    except Exception as e:
+                        logger.error(f"Error converting email to EmailMessage: {e}")
+                        continue
+                
+                if email_messages:
+                    logger.info(f"🧠 [{processing_type.upper()}] Uploading {len(email_messages)} emails to Mem0...")
+                    mem0_result = await upload_emails_to_mem0(user_id, email_messages)
+                    logger.info(f"✅ [{processing_type.upper()}] Mem0 upload result: {mem0_result}")
+            
+            return {
+                "success": True,
+                "status": "success",
+                "emails_stored": stored_count,
+                "promotional_filtered": len(emails) - len(filtered_emails),
+                "financial_preserved": sum(1 for email in filtered_emails if email.get("financial", False)),
+                "processing_type": processing_type,
+                "total_count": len(emails)
+            }
+        else:
+            logger.error(f"❌ [{processing_type.upper()}] Failed to store emails: {storage_result}")
+            return {
+                "success": False,
+                "status": "error",
+                "message": f"Failed to store emails: {storage_result.get('error', 'Unknown error')}",
+                "processing_type": processing_type
+            }
+    
+    except Exception as e:
+        logger.error(f"❌ [{processing_type.upper()}] Error processing emails: {e}")
+        return {
+            "success": False,
+            "status": "error", 
+            "message": str(e),
+            "processing_type": processing_type
+        }

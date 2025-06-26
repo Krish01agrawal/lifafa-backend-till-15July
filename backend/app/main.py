@@ -3,6 +3,7 @@ import time
 from dotenv import load_dotenv
 from typing import Optional, List, Dict, Any
 from datetime import datetime
+import re
 
 # Determine the path to the .env file (two levels up from this file)
 # main.py is in backend/app/main.py, .env is in the root
@@ -45,7 +46,7 @@ from .config import (
     DEFAULT_EMAIL_LIMIT, MAX_EMAIL_LIMIT, ENABLE_SMART_CACHING,
     ENABLE_BATCH_PROCESSING, MAX_CONCURRENT_EMAIL_PROCESSING,
     ENABLE_DATABASE_SHARDING, STORAGE_WARNING_THRESHOLD, 
-    STORAGE_CRITICAL_THRESHOLD, ENABLE_AUTO_CLEANUP
+    STORAGE_CRITICAL_THRESHOLD, ENABLE_AUTO_CLEANUP, ENABLE_SMART_EMAIL_FILTERING
 )
 from .middleware import (
     enhanced_rate_limit_middleware, email_processing_context, 
@@ -307,8 +308,13 @@ async def google_login(payload: GoogleToken):
 
 @app.post("/gmail/fetch")
 async def gmail_fetch(payload: GmailFetchPayload):
-    # Authenticate user with JWT
-    logger.info("Received request for /gmail/fetch")
+    """
+    PROGRESSIVE EMAIL LOADING: 
+    1. Immediately process 1-week recent emails for instant dashboard access
+    2. Trigger background processing for 6-month historical data
+    3. User can start querying immediately while historical data loads
+    """
+    logger.info("🚀 [PROGRESSIVE] Received request for /gmail/fetch")
     try:
         logger.info("Decoding JWT token...")
         user = decode_jwt_token(payload.jwt_token)
@@ -317,10 +323,12 @@ async def gmail_fetch(payload: GmailFetchPayload):
 
         # Use email processing context for resource management
         async with email_processing_context(user_id) as rm:
-            # Call the core processing function with timeout
+            # STEP 1: Process recent emails immediately (1 week) - FAST!
+            logger.info(f"🔥 [IMMEDIATE] Processing recent emails for instant dashboard access...")
+            
             result = await asyncio.wait_for(
-                _trigger_and_process_user_emails(user_id=user_id, access_token=payload.access_token, max_results=3500),
-                timeout=EMAIL_PROCESSING_TIMEOUT
+                _process_immediate_emails(user_id=user_id, access_token=payload.access_token, days=7),
+                timeout=60  # Shorter timeout for immediate processing
             )
 
             if result["status"] == "error":
@@ -329,13 +337,34 @@ async def gmail_fetch(payload: GmailFetchPayload):
                     detail=result["message"]
                 )
 
-            return {"message": result["message"], "count": result["count"]}
+            # STEP 2: Log background processing status
+            if result.get("dashboard_ready", False):
+                logger.info(f"✅ [IMMEDIATE] Dashboard ready for user {user_id}")
+                logger.info(f"🔄 [BACKGROUND] Historical data processing will start automatically")
+                
+                # Console message for immediate feedback
+                print(f"\n{'='*80}")
+                print(f"🎉 DASHBOARD READY for User: {user_id}")
+                print(f"📊 Recent emails processed: {result.get('recent_emails_count', 0)}")
+                print(f"💰 Recent financial transactions: {result.get('recent_financial_transactions', 0)}")
+                print(f"✅ User can start querying immediately!")
+                print(f"🔄 Background: 6-month historical data loading...")
+                print(f"{'='*80}\n")
+
+            return {
+                "message": result["message"], 
+                "count": result.get("recent_emails_count", 0),
+                "dashboard_ready": result.get("dashboard_ready", False),
+                "background_processing": result.get("background_processing", False),
+                "processing_type": "progressive",
+                "status": result["status"]
+            }
             
     except asyncio.TimeoutError:
-        logger.error(f"Gmail fetch timeout for user {user_id}")
+        logger.error(f"Gmail immediate fetch timeout for user {user_id}")
         raise HTTPException(
             status_code=status.HTTP_408_REQUEST_TIMEOUT,
-            detail=f"Email processing timed out after {EMAIL_PROCESSING_TIMEOUT} seconds"
+            detail=f"Immediate email processing timed out after 60 seconds"
         )
     except HTTPException as e:
         logger.error(f"HTTPException in gmail_fetch: {e.detail}", exc_info=True)
@@ -464,10 +493,16 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
                 detail="User not found"
             )
         
-        # Check if user needs initial email sync
+        # Check progressive loading status
         has_email_data = await emails_collection.count_documents({"user_id": user_id}) > 0
         current_sync_status = user_in_db.get("initial_gmailData_sync", False)
         current_fetched_status = user_in_db.get("fetched_email", False)
+        dashboard_ready = user_in_db.get("dashboard_ready", False)
+        background_sync_needed = user_in_db.get("background_sync_needed", False)
+        historical_sync_completed = user_in_db.get("historical_sync_completed", False)
+        recent_financial_transactions = user_in_db.get("recent_financial_transactions", 0)
+        complete_financial_ready = user_in_db.get("complete_financial_ready", False)
+        financial_analysis_completed = user_in_db.get("financial_analysis_completed", False)
 
         # Check if user has data in Mem0 as well
         has_mem0_data = False
@@ -522,7 +557,43 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
 
         # Convert ObjectId to string before returning
         serializable_user_info = convert_objectid_to_str(user_in_db)
+        
+        # Add progressive loading status for frontend
+        serializable_user_info["has_email_data"] = has_email_data
+        serializable_user_info["dashboard_ready"] = dashboard_ready
+        serializable_user_info["background_sync_needed"] = background_sync_needed
+        serializable_user_info["historical_sync_completed"] = historical_sync_completed
+        serializable_user_info["recent_financial_transactions"] = recent_financial_transactions
+        serializable_user_info["complete_financial_ready"] = complete_financial_ready
+        serializable_user_info["financial_analysis_completed"] = financial_analysis_completed
+        serializable_user_info["needs_email_sync"] = not current_fetched_status
+        serializable_user_info["email_sync_in_progress"] = current_fetched_status and not current_sync_status
+        
+        # Determine overall status for frontend
+        if dashboard_ready and historical_sync_completed and financial_analysis_completed:
+            serializable_user_info["sync_status"] = "complete"
+            serializable_user_info["sync_message"] = "All email and financial data synchronized and ready for queries"
+        elif dashboard_ready and historical_sync_completed and not financial_analysis_completed:
+            serializable_user_info["sync_status"] = "financial_processing"
+            serializable_user_info["sync_message"] = f"Email data ready! Processing complete financial analysis... ({recent_financial_transactions} recent transactions available)"
+        elif dashboard_ready and background_sync_needed:
+            serializable_user_info["sync_status"] = "partial"
+            serializable_user_info["sync_message"] = f"Dashboard ready with {recent_financial_transactions} recent transactions! Historical data loading in background..."
+        elif current_fetched_status and not dashboard_ready:
+            serializable_user_info["sync_status"] = "processing"
+            serializable_user_info["sync_message"] = "Processing recent emails and financial data for dashboard access..."
+        else:
+            serializable_user_info["sync_status"] = "pending"
+            serializable_user_info["sync_message"] = "Click 'Sync Gmail' to start"
+        
         logger.info(f"Successfully fetched user data for /me: {serializable_user_info.get('email')}")
+        logger.info(f"   - Dashboard ready: {dashboard_ready}")
+        logger.info(f"   - Background sync needed: {background_sync_needed}")
+        logger.info(f"   - Historical sync completed: {historical_sync_completed}")
+        logger.info(f"   - Recent financial transactions: {recent_financial_transactions}")
+        logger.info(f"   - Complete financial ready: {complete_financial_ready}")
+        logger.info(f"   - Overall status: {serializable_user_info['sync_status']}")
+        
         return serializable_user_info
         
     except HTTPException as e:
@@ -648,7 +719,11 @@ async def _trigger_and_process_user_emails(user_id: str, access_token: str, max_
         return {"success": False, "status": "error", "message": str(e)}
 
 async def check_and_fetch_new_user_emails():
-    logger.info("Background worker: Checking for users with fetched_email=false")
+    """
+    PROGRESSIVE LOADING: Process only IMMEDIATE emails (1-week recent data)
+    This allows users to start querying immediately while historical data loads in background
+    """
+    logger.info("🔄 [PROGRESSIVE] Background worker: Checking for users with fetched_email=false")
     try:
         users_to_fetch = users_collection.find({"fetched_email": False})
         users_found = 0
@@ -658,42 +733,66 @@ async def check_and_fetch_new_user_emails():
             access_token = user.get("access_token")
             
             if not user_id or not access_token:
-                logger.warning(f"Background worker: Skipping user {user.get('_id')} due to missing user_id or access_token.")
+                logger.warning(f"⚠️ [PROGRESSIVE] Background worker: Skipping user {user.get('_id')} due to missing user_id or access_token.")
                 continue
 
-            logger.info(f"Background worker: Found user {user_id} with fetched_email=false. Triggering email processing.")
+            logger.info(f"🚀 [PROGRESSIVE] Background worker: Found user {user_id} with fetched_email=false. Starting IMMEDIATE processing.")
             
-            # Reset financial analysis status when starting new email fetch
+            # Reset all sync flags when starting new email fetch
             await users_collection.update_one(
                 {"user_id": user_id},
-                {"$set": {"financial_analysis_completed": False}}
+                {"$set": {
+                    "financial_analysis_completed": False,
+                    "dashboard_ready": False,
+                    "background_sync_needed": False,
+                    "historical_sync_completed": False,
+                    "recent_financial_transactions": 0,
+                    "complete_financial_ready": False
+                }}
             )
+            logger.info(f"🔄 [PROGRESSIVE] Reset all sync flags for user {user_id}")
             
             try:
-                # Process emails for this user
-                result = await _trigger_and_process_user_emails(user_id=user_id, access_token=access_token, max_results=3500)
-                logger.info(f"Background worker: Email processing result for user {user_id}: {result}")
+                # 🎯 PHASE 1: Process IMMEDIATE emails (1-week recent data) - 60 seconds max
+                logger.info(f"⚡ [PHASE 1] Starting IMMEDIATE email processing for user {user_id} (1-week recent data)")
+                immediate_result = await _process_immediate_emails(user_id=user_id, access_token=access_token, days=7)
+                logger.info(f"⚡ [PHASE 1] Immediate processing result for user {user_id}: {immediate_result}")
                 
-                # 🔧 CRITICAL FIX: Check for consistent success key
-                if result.get("success", False) or result.get("status") == "success":
-                    logger.info(f"🎉 Background worker: User {user_id} email processing completed successfully!")
-                    # Flags are already updated in _trigger_and_process_user_emails function
+                if immediate_result.get("success", False):
+                    logger.info(f"🎉 [PHASE 1] IMMEDIATE processing completed successfully for user {user_id}!")
+                    logger.info(f"   📧 Recent emails processed: {immediate_result.get('emails_processed', 0)}")
+                    logger.info(f"   💰 Recent financial transactions: {immediate_result.get('financial_transactions', 0)}")
+                    logger.info(f"   ⏱️ Processing time: {immediate_result.get('processing_time', 'N/A')}")
+                    
+                    # Console message for user feedback
+                    print(f"\n{'='*80}")
+                    print(f"🎉 DASHBOARD READY for User: {user_id}")
+                    print(f"📊 Recent emails processed: {immediate_result.get('emails_processed', 0)}")
+                    print(f"💰 Recent financial transactions: {immediate_result.get('financial_transactions', 0)}")
+                    print(f"✅ User can start querying immediately!")
+                    print(f"🔄 Background: 6-month historical data loading...")
+                    print(f"{'='*80}\n")
+                    
+                    # Flags are already updated in _process_immediate_emails function
+                    # User can now start querying with recent data
+                    
                 else:
-                    logger.error(f"Background worker: Email processing failed for user {user_id}: {result}")
+                    logger.error(f"❌ [PHASE 1] IMMEDIATE processing failed for user {user_id}: {immediate_result}")
+                    # Keep fetched_email=false so it can be retried later
                     
             except Exception as user_error:
-                logger.error(f"Background worker: Failed to process emails for user {user_id}: {str(user_error)}", exc_info=True)
+                logger.error(f"❌ [PROGRESSIVE] Failed to process IMMEDIATE emails for user {user_id}: {str(user_error)}", exc_info=True)
                 # Keep fetched_email=false so it can be retried later
-                logger.info(f"Background worker: User {user_id} will be retried in next cycle")
+                logger.info(f"🔄 [PROGRESSIVE] User {user_id} will be retried in next cycle")
 
         if users_found == 0:
-            logger.info("Background worker: No users found with fetched_email=false")
+            logger.info("✅ [PROGRESSIVE] Background worker: No users found with fetched_email=false")
         else:
-            logger.info(f"Background worker: Processed {users_found} users")
+            logger.info(f"📊 [PROGRESSIVE] Background worker: Processed {users_found} users for IMMEDIATE sync")
             
-        logger.info("Background worker: Finished checking for users.")
+        logger.info("🏁 [PROGRESSIVE] Background worker: Finished checking for users.")
     except Exception as e:
-        logger.error(f"Background worker: Error during check_and_fetch_new_user_emails: {str(e)}", exc_info=True)
+        logger.error(f"❌ [PROGRESSIVE] Background worker: Error during check_and_fetch_new_user_emails: {str(e)}", exc_info=True)
 
 async def check_and_process_financial_analysis():
     """
@@ -702,9 +801,9 @@ async def check_and_process_financial_analysis():
     """
     logger.info("Financial worker: Checking for users needing financial analysis")
     try:
-        # Find users who have completed email sync but not financial analysis
+        # Find users who have completed historical sync but not complete financial analysis
         users_to_process = users_collection.find({
-            "initial_gmailData_sync": True,
+            "historical_sync_completed": True,
             "financial_analysis_completed": False
         })
         
@@ -717,34 +816,44 @@ async def check_and_process_financial_analysis():
                 logger.warning(f"Financial worker: Skipping user {user.get('_id')} due to missing user_id.")
                 continue
 
-            logger.info(f"Financial worker: Found user {user_id} needing financial analysis. Starting processing.")
+            logger.info(f"Financial worker: Found user {user_id} needing COMPLETE financial analysis. Starting processing.")
             
             try:
                 # Import the fast processing logic
                 from app.fast_financial_processor import process_financial_transactions_from_mongodb
                 
-                # Process financial transactions with timeout
+                # Process COMPLETE financial transactions (recent + historical) with timeout
                 result = await asyncio.wait_for(
                     process_financial_transactions_from_mongodb(user_id),
                     timeout=EMAIL_PROCESSING_TIMEOUT
                 )
                 
                 if result["status"] == "success":
-                    logger.info(f"Financial worker: Successfully processed financial data for user {user_id}")
-                    logger.info(f"Financial worker: Found {result.get('transactions_found', 0)} transactions")
+                    total_transactions = result.get('transactions_found', 0)
+                    logger.info(f"Financial worker: Successfully processed COMPLETE financial data for user {user_id}")
+                    logger.info(f"Financial worker: Found {total_transactions} total transactions (recent + historical)")
                     
-                    # Update user status with detailed information
+                    # Update user status with complete financial information
                     await users_collection.update_one(
                         {"user_id": user_id},
                         {"$set": {
                             "financial_analysis_completed": True,
                             "financial_analysis_date": datetime.now().isoformat(),
-                            "financial_transactions_count": result.get('transactions_found', 0),
-                            "financial_processing_method": "fast_mongodb"
+                            "financial_transactions_count": total_transactions,
+                            "financial_processing_method": "complete_mongodb",
+                            "complete_financial_ready": True
                         }}
                     )
+                    
+                    # Console message for complete financial analysis
+                    print(f"\n{'='*80}")
+                    print(f"💰 COMPLETE FINANCIAL ANALYSIS DONE for User: {user_id}")
+                    print(f"📊 Total financial transactions: {total_transactions}")
+                    print(f"✅ Full financial insights now available for queries")
+                    print(f"{'='*80}\n")
+                    
                 else:
-                    logger.error(f"Financial worker: Failed to process financial data for user {user_id}: {result.get('error', 'Unknown error')}")
+                    logger.error(f"Financial worker: Failed to process complete financial data for user {user_id}: {result.get('error', 'Unknown error')}")
                     
             except asyncio.TimeoutError:
                 logger.error(f"Financial worker: Timeout processing financial data for user {user_id}")
@@ -772,26 +881,31 @@ async def startup_event():
     except Exception as e:
         logger.error(f"⚠️ Database initialization failed: {e}")
     
-    # Schedule the email fetching job to run every 10 seconds (optimized)
-    scheduler.add_job(check_and_fetch_new_user_emails, "interval", seconds=10, id="fetch_new_emails_job")
+    # Schedule the email fetching job to run every 15 seconds (reduced frequency to prevent conflicts)
+    scheduler.add_job(check_and_fetch_new_user_emails, "interval", seconds=15, id="fetch_new_emails_job", max_instances=1)
     
-    # Schedule the financial analysis job to run every 45 seconds (offset to avoid conflicts)
-    scheduler.add_job(check_and_process_financial_analysis, "interval", seconds=45, id="financial_analysis_job")
+    # Schedule the NEW background historical sync job to run every 120 seconds (non-blocking, reduced frequency)
+    scheduler.add_job(check_and_process_background_historical_sync, "interval", seconds=120, id="historical_sync_job", max_instances=1)
+    
+    # Schedule the financial analysis job to run every 90 seconds (offset to avoid conflicts)
+    scheduler.add_job(check_and_process_financial_analysis, "interval", seconds=90, id="financial_analysis_job", max_instances=1)
     
     # Start continuous performance monitoring
     asyncio.create_task(performance_monitor())
     
     scheduler.start()
-    logger.info("🚀 APScheduler started with enhanced optimizations.")
-    logger.info("📊 Optimization Summary:")
+    logger.info("🚀 APScheduler started with PROGRESSIVE LOADING optimizations.")
+    logger.info("📊 Progressive Loading Summary:")
     logger.info(f"   • Concurrent users: {CONCURRENT_USERS_LIMIT} (↑ from 15)")
-    logger.info(f"   • Email fetch limit: {DEFAULT_EMAIL_LIMIT} (↑ from 3,500)")
+    logger.info(f"   • Immediate processing: 1-week emails (⚡ instant dashboard)")
+    logger.info(f"   • Background processing: 6-month emails (🔄 complete history)")
     logger.info(f"   • Smart caching: {'Enabled' if ENABLE_SMART_CACHING else 'Disabled'}")
     logger.info(f"   • Batch processing: {'Enabled' if ENABLE_BATCH_PROCESSING else 'Disabled'}")
     logger.info("   • Performance monitoring: Active")
-    logger.info("📧 Job 'fetch_new_emails_job' scheduled every 10 seconds (↓ from 30s).")
+    logger.info("📧 Job 'fetch_new_emails_job' scheduled every 10 seconds.")
+    logger.info("🔄 Job 'historical_sync_job' scheduled every 30 seconds (NEW).")
     logger.info("💰 Job 'financial_analysis_job' scheduled every 45 seconds.")
-    logger.info("🚀 Expected 10-15x performance improvement!")
+    logger.info("🎯 PROGRESSIVE LOADING: Users can query immediately after 1-week sync!")
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -1488,3 +1602,743 @@ logger.info(f"   📧 Email retention: 6 months maximum")
 logger.info(f"   🗜️ Storage compression: 90% space saving")
 logger.info(f"   ♾️ Scalability: Infinite (with multiple free accounts)")
 logger.info("   🔗 Monitoring: /storage/stats, /storage/cleanup, /health")
+
+# Add new progressive loading functions after the existing imports and before the main endpoints
+
+# ============================================================================
+# PROGRESSIVE EMAIL LOADING SYSTEM
+# ============================================================================
+
+async def _process_immediate_emails(user_id: str, access_token: str, days: int = 7, websocket_client_id: str = None) -> Dict[str, Any]:
+    """
+    IMMEDIATE Processing: Fetch and process recent emails (1 week) for instant dashboard access
+    This runs synchronously when user hits /gmail/fetch for immediate user experience
+    """
+    start_time = datetime.now()
+    logger.info(f"🚀 [IMMEDIATE] Starting {days}-day email processing for user: {user_id}")
+    logger.info(f"   📅 Date range: Last {days} days")
+    logger.info(f"   📧 Max emails: 500")
+    logger.info(f"   ⏰ Started at: {start_time.strftime('%H:%M:%S')}")
+    
+    try:
+        # Step 1: Build Gmail service (memory-safe)
+        logger.info(f"🔑 [IMMEDIATE] Step 1: Building Gmail service for user {user_id}")
+        credentials = Credentials(token=access_token)
+        # Disable discovery cache to prevent memory issues
+        service = build('gmail', 'v1', credentials=credentials, cache_discovery=False)
+        logger.info(f"✅ [IMMEDIATE] Gmail service built successfully (cache disabled)")
+        
+        # Step 2: Fetch recent emails only (much faster)
+        logger.info(f"📧 [IMMEDIATE] Step 2: Fetching {days}-day recent emails...")
+        
+        # Send progress update if WebSocket is available
+        if websocket_client_id:
+            try:
+                from .websocket import manager
+                await manager.send_progress_update(
+                    websocket_client_id, 
+                    "fetching_emails", 
+                    f"Fetching {days}-day recent emails from Gmail...", 
+                    40
+                )
+            except Exception as ws_error:
+                logger.warning(f"WebSocket progress update failed: {ws_error}")
+        
+        from .gmail import fetch_gmail_emails_by_days
+        emails = await fetch_gmail_emails_by_days(service, user_id, days=days, max_results=500)
+        logger.info(f"📊 [IMMEDIATE] Fetched {len(emails) if emails else 0} recent emails")
+        
+        # Send fetch completion update
+        if websocket_client_id:
+            try:
+                from .websocket import manager
+                await manager.send_progress_update(
+                    websocket_client_id, 
+                    "emails_fetched", 
+                    f"Fetched {len(emails) if emails else 0} recent emails", 
+                    50,
+                    {"emails_count": len(emails) if emails else 0}
+                )
+            except Exception as ws_error:
+                logger.warning(f"WebSocket progress update failed: {ws_error}")
+        
+        if emails:
+            logger.info(f"🔄 [IMMEDIATE] Step 3: Processing {len(emails)} emails for storage...")
+            
+            # Force garbage collection before processing to free memory
+            import gc
+            gc.collect()
+            logger.info(f"🧹 [IMMEDIATE] Memory cleanup completed before processing")
+            
+            # Send processing update
+            if websocket_client_id:
+                try:
+                    from .websocket import manager
+                    await manager.send_progress_update(
+                        websocket_client_id, 
+                        "processing_emails", 
+                        f"Processing and storing {len(emails)} emails...", 
+                        60
+                    )
+                except Exception as ws_error:
+                    logger.warning(f"WebSocket progress update failed: {ws_error}")
+            
+            # Process and store recent emails
+            result = await process_and_store_emails(user_id, emails, is_immediate=True)
+            
+            if result.get("success", False):
+                emails_stored = result.get('emails_stored', 0)
+                logger.info(f"✅ [IMMEDIATE] Step 3 Complete: Successfully processed {emails_stored} recent emails")
+                logger.info(f"   📊 Storage result: {result}")
+                
+                # Step 4: IMMEDIATE FINANCIAL ANALYSIS for recent emails
+                logger.info(f"💰 [IMMEDIATE] Step 4: Starting financial analysis for recent emails...")
+                
+                # Send financial analysis update
+                if websocket_client_id:
+                    try:
+                        from .websocket import manager
+                        await manager.send_progress_update(
+                            websocket_client_id, 
+                            "financial_analysis", 
+                            "Analyzing financial transactions from recent emails...", 
+                            80
+                        )
+                    except Exception as ws_error:
+                        logger.warning(f"WebSocket progress update failed: {ws_error}")
+                
+                try:
+                    from app.fast_financial_processor import process_financial_transactions_from_mongodb
+                    
+                    # Process financial transactions from recent emails
+                    financial_result = await asyncio.wait_for(
+                        process_financial_transactions_from_mongodb(user_id),
+                        timeout=30  # Quick timeout for immediate processing
+                    )
+                    
+                    if financial_result["status"] == "success":
+                        recent_transactions = financial_result.get('transactions_found', 0)
+                        logger.info(f"✅ [IMMEDIATE] Step 4 Complete: Found {recent_transactions} recent financial transactions")
+                    else:
+                        recent_transactions = 0
+                        logger.warning(f"⚠️ [IMMEDIATE] Step 4 Warning: Financial analysis failed: {financial_result.get('error', 'Unknown error')}")
+                        
+                except Exception as financial_error:
+                    recent_transactions = 0
+                    logger.error(f"❌ [IMMEDIATE] Step 4 Error: Financial analysis failed: {financial_error}")
+                
+                # Step 5: Update user flags for immediate access with financial data
+                logger.info(f"🔄 [IMMEDIATE] Step 5: Updating user flags for immediate access...")
+                users_coll = await db_manager.get_collection(user_id, "users")
+                await users_coll.update_one(
+                    {"user_id": user_id},
+                    {"$set": {
+                        "fetched_email": True,  # ✅ Enable dashboard access
+                        "recent_sync_completed": True,  # ✅ Recent data ready
+                        "recent_sync_date": datetime.now().isoformat(),
+                        "recent_emails_processed": emails_stored,
+                        "recent_financial_transactions": recent_transactions,  # ✅ Recent financial data
+                        "dashboard_ready": True,  # ✅ User can start querying
+                        "background_sync_needed": True  # 🔄 Trigger background processing
+                    }},
+                    upsert=True
+                )
+                
+                # Calculate processing time
+                end_time = datetime.now()
+                processing_time = (end_time - start_time).total_seconds()
+                
+                logger.info(f"🎉 [IMMEDIATE] COMPLETE SUCCESS for user {user_id}:")
+                logger.info(f"   📧 Recent emails processed: {emails_stored}")
+                logger.info(f"   💰 Financial transactions: {recent_transactions}")
+                logger.info(f"   ⏱️ Processing time: {processing_time:.2f} seconds")
+                logger.info(f"   ✅ Dashboard ready: User can start querying!")
+                logger.info(f"   🔄 Background sync: Historical data will load in background")
+                
+                return {
+                    "success": True,
+                    "status": "immediate_ready",
+                    "message": f"Dashboard ready! {emails_stored} recent emails processed, {recent_transactions} financial transactions found. Historical data loading in background.",
+                    "emails_processed": emails_stored,
+                    "financial_transactions": recent_transactions,
+                    "processing_time": f"{processing_time:.2f}s",
+                    "dashboard_ready": True,
+                    "background_processing": True,
+                    "financial_ready": recent_transactions > 0,
+                    "processing_type": "immediate"
+                }
+            else:
+                logger.error(f"❌ [IMMEDIATE] Step 3 Failed: Email storage failed for user {user_id}")
+                logger.error(f"   📊 Storage result: {result}")
+                return result
+        else:
+            # No recent emails - still enable dashboard and check for existing financial data
+            logger.info(f"📭 [IMMEDIATE] No recent emails found for user {user_id}")
+            logger.info(f"💰 [IMMEDIATE] Step 3: Checking existing financial data...")
+            recent_transactions = 0
+            try:
+                from app.fast_financial_processor import process_financial_transactions_from_mongodb
+                
+                # Check for any existing financial transactions
+                financial_result = await asyncio.wait_for(
+                    process_financial_transactions_from_mongodb(user_id),
+                    timeout=15  # Quick check
+                )
+                
+                if financial_result["status"] == "success":
+                    recent_transactions = financial_result.get('transactions_found', 0)
+                    logger.info(f"✅ [IMMEDIATE] Found {recent_transactions} existing financial transactions")
+                else:
+                    logger.info(f"📊 [IMMEDIATE] No existing financial transactions found")
+                    
+            except Exception as financial_error:
+                logger.warning(f"⚠️ [IMMEDIATE] Financial check failed: {financial_error}")
+            
+            # Calculate processing time
+            end_time = datetime.now()
+            processing_time = (end_time - start_time).total_seconds()
+            
+            logger.info(f"🔄 [IMMEDIATE] Step 4: Updating user flags (no recent emails case)...")
+            users_coll = await db_manager.get_collection(user_id, "users")
+            await users_coll.update_one(
+                {"user_id": user_id},
+                {"$set": {
+                    "fetched_email": True,
+                    "recent_sync_completed": True,
+                    "dashboard_ready": True,
+                    "background_sync_needed": True,
+                    "recent_emails_processed": 0,
+                    "recent_financial_transactions": recent_transactions
+                }},
+                upsert=True
+            )
+            
+            logger.info(f"🎉 [IMMEDIATE] COMPLETE SUCCESS for user {user_id} (no recent emails):")
+            logger.info(f"   📧 Recent emails processed: 0")
+            logger.info(f"   💰 Financial transactions: {recent_transactions}")
+            logger.info(f"   ⏱️ Processing time: {processing_time:.2f} seconds")
+            logger.info(f"   ✅ Dashboard ready: User can start querying!")
+            logger.info(f"   🔄 Background sync: Historical data will load in background")
+            
+            return {
+                "success": True,
+                "status": "immediate_ready",
+                "message": f"Dashboard ready! No recent emails found, {recent_transactions} financial transactions available. Historical data loading in background.",
+                "emails_processed": 0,
+                "financial_transactions": recent_transactions,
+                "processing_time": f"{processing_time:.2f}s",
+                "dashboard_ready": True,
+                "background_processing": True,
+                "financial_ready": recent_transactions > 0,
+                "processing_type": "immediate"
+            }
+            
+    except Exception as e:
+        end_time = datetime.now()
+        processing_time = (end_time - start_time).total_seconds()
+        logger.error(f"❌ [IMMEDIATE] CRITICAL ERROR for user {user_id}:")
+        logger.error(f"   🚨 Error: {str(e)}")
+        logger.error(f"   ⏱️ Failed after: {processing_time:.2f} seconds")
+        logger.error(f"   🔄 User will be retried in next cycle")
+        return {"success": False, "status": "error", "message": str(e), "processing_time": f"{processing_time:.2f}s"}
+
+async def _process_historical_emails(user_id: str, access_token: str, months: int = 6) -> Dict[str, Any]:
+    """
+    BACKGROUND Processing: Fetch and process historical emails (6 months) for complete data
+    This runs in background worker after immediate processing is complete
+    """
+    logger.info(f"🔄 [BACKGROUND] Processing {months}-month historical emails for user: {user_id}")
+    
+    try:
+        # Build Gmail service
+        credentials = Credentials(token=access_token)
+        service = build('gmail', 'v1', credentials=credentials)
+        
+        # Fetch historical emails (excluding recent 7 days already processed)
+        from .gmail import fetch_gmail_emails_historical
+        emails = await fetch_gmail_emails_historical(service, user_id, months=months, exclude_recent_days=7, max_results=5000)
+        
+        if emails:
+            # Process and store historical emails
+            result = await process_and_store_emails(user_id, emails, is_historical=True)
+            
+            if result.get("success", False):
+                logger.info(f"✅ [BACKGROUND] Successfully processed {result['emails_stored']} historical emails")
+                
+                # Update user flags for complete sync
+                users_coll = await db_manager.get_collection(user_id, "users")
+                await users_coll.update_one(
+                    {"user_id": user_id},
+                    {"$set": {
+                        "initial_gmailData_sync": True,  # ✅ Complete data sync done
+                        "historical_sync_completed": True,
+                        "historical_sync_date": datetime.now().isoformat(),
+                        "historical_emails_processed": result['emails_stored'],
+                        "background_sync_needed": False,  # ✅ Background processing complete
+                        "total_emails_processed": result.get('total_count', 0)
+                    }},
+                    upsert=True
+                )
+                
+                logger.info(f"🎉 [BACKGROUND] User {user_id} complete sync finished - {result['emails_stored']} historical emails")
+                
+                return {
+                    "success": True,
+                    "status": "historical_complete",
+                    "message": f"Complete email sync finished! {result['emails_stored']} historical emails processed.",
+                    "historical_emails_count": result['emails_stored'],
+                    "complete_sync": True,
+                    "processing_type": "historical"
+                }
+            else:
+                return result
+        else:
+            # No historical emails found - mark as complete
+            users_coll = await db_manager.get_collection(user_id, "users")
+            await users_coll.update_one(
+                {"user_id": user_id},
+                {"$set": {
+                    "initial_gmailData_sync": True,
+                    "historical_sync_completed": True,
+                    "background_sync_needed": False,
+                    "historical_emails_processed": 0
+                }},
+                upsert=True
+            )
+            
+            return {
+                "success": True,
+                "status": "historical_complete", 
+                "message": "Complete email sync finished! No additional historical emails found.",
+                "historical_emails_count": 0,
+                "complete_sync": True,
+                "processing_type": "historical"
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ [BACKGROUND] Error processing historical emails for user {user_id}: {e}")
+        return {"success": False, "status": "error", "message": str(e)}
+
+# ============================================================================
+# PROGRESSIVE BACKGROUND WORKERS
+# ============================================================================
+
+async def check_and_process_background_historical_sync():
+    """
+    NON-BLOCKING Background worker to process historical emails
+    Starts background tasks without blocking WebSocket connections
+    """
+    logger.info("🔄 [BACKGROUND WORKER] Checking for users needing historical email sync")
+    try:
+        # Debug: First check all users
+        all_users = await users_collection.find({}).to_list(length=10)
+        logger.info(f"🔍 [BACKGROUND DEBUG] Found {len(all_users)} total users in database")
+        
+        for user in all_users:
+            user_id = user.get("user_id", "unknown")
+            dashboard_ready = user.get("dashboard_ready", False)
+            background_sync_needed = user.get("background_sync_needed", False)
+            historical_sync_completed = user.get("historical_sync_completed", False)
+            
+            logger.info(f"🔍 [BACKGROUND DEBUG] User {user_id}:")
+            logger.info(f"    dashboard_ready: {dashboard_ready}")
+            logger.info(f"    background_sync_needed: {background_sync_needed}")
+            logger.info(f"    historical_sync_completed: {historical_sync_completed}")
+        
+        # Find users who completed recent sync but need historical processing
+        query = {
+            "dashboard_ready": True,
+            "background_sync_needed": True,
+            "historical_sync_completed": {"$ne": True}
+        }
+        logger.info(f"🔍 [BACKGROUND DEBUG] Query: {query}")
+        
+        users_to_process = users_collection.find(query)
+        
+        users_found = 0
+        async for user in users_to_process:
+            users_found += 1
+            user_id = user.get("user_id")
+            access_token = user.get("access_token")
+            
+            logger.info(f"🎯 [BACKGROUND] Found user needing historical sync: {user_id}")
+            logger.info(f"    access_token present: {bool(access_token)}")
+            
+            if not user_id or not access_token:
+                logger.warning(f"[BACKGROUND] Skipping user {user.get('_id')} due to missing credentials")
+                continue
+
+            logger.info(f"🚀 [BACKGROUND] Starting NON-BLOCKING historical sync for user {user_id}")
+            
+            # Start background processing in a separate task to avoid blocking WebSocket
+            asyncio.create_task(process_historical_emails_non_blocking(user_id, access_token))
+            
+            # Process only 1 user per cycle to avoid system overload
+            break
+
+        if users_found == 0:
+            logger.info("[BACKGROUND WORKER] No users found needing historical sync")
+        else:
+            logger.info(f"[BACKGROUND WORKER] Started background sync for {users_found} users")
+            
+    except Exception as e:
+        logger.error(f"[BACKGROUND WORKER] Error during historical sync check: {str(e)}", exc_info=True)
+
+async def process_historical_emails_non_blocking(user_id: str, access_token: str):
+    """
+    Process historical emails in background without blocking WebSocket connections
+    Uses smaller batches and yields control to prevent blocking
+    """
+    logger.info(f"🔄 [NON-BLOCKING] Starting background historical processing for user: {user_id}")
+    
+    # Start keepalive task for active WebSocket connections
+    keepalive_task = asyncio.create_task(send_keepalive_to_user_connections(user_id))
+    
+    try:
+        # Build Gmail service
+        credentials = Credentials(token=access_token)
+        service = build('gmail', 'v1', credentials=credentials, cache_discovery=False)
+        
+        # Fetch historical emails in smaller batches (excluding recent 7 days already processed)
+        from .gmail import fetch_gmail_emails_historical
+        
+        logger.info(f"📧 [NON-BLOCKING] Fetching historical emails for user {user_id}...")
+        emails = await fetch_gmail_emails_historical(service, user_id, months=6, exclude_recent_days=7, max_results=2000)  # Reduced from 5000
+        
+        if emails:
+            logger.info(f"📧 [NON-BLOCKING] Processing {len(emails)} historical emails in background...")
+            
+            # Process emails in smaller batches with async yields to prevent blocking
+            result = await process_and_store_emails_non_blocking(user_id, emails, is_historical=True)
+            
+            if result.get("success", False):
+                logger.info(f"✅ [NON-BLOCKING] Successfully processed {result['emails_stored']} historical emails")
+                
+                # Update user flags for complete sync
+                users_coll = await db_manager.get_collection(user_id, "users")
+                await users_coll.update_one(
+                    {"user_id": user_id},
+                    {"$set": {
+                        "initial_gmailData_sync": True,  # ✅ Complete data sync done
+                        "historical_sync_completed": True,
+                        "historical_sync_date": datetime.now().isoformat(),
+                        "historical_emails_processed": result['emails_stored'],
+                        "background_sync_needed": False,  # ✅ Background processing complete
+                        "total_emails_processed": result.get('total_count', 0)
+                    }},
+                    upsert=True
+                )
+                
+                # Console message for user feedback
+                print(f"\n{'='*80}")
+                print(f"🎉 BACKGROUND SYNC COMPLETED for User: {user_id}")
+                print(f"📊 Historical emails processed: {result['emails_stored']}")
+                print(f"✅ Complete 6-month email history now available for queries")
+                print(f"{'='*80}\n")
+                
+            else:
+                logger.error(f"❌ [NON-BLOCKING] Historical sync failed for user {user_id}: {result.get('message', 'Unknown error')}")
+        else:
+            # No historical emails found - mark as complete
+            users_coll = await db_manager.get_collection(user_id, "users")
+            await users_coll.update_one(
+                {"user_id": user_id},
+                {"$set": {
+                    "initial_gmailData_sync": True,
+                    "historical_sync_completed": True,
+                    "background_sync_needed": False,
+                    "historical_emails_processed": 0
+                }},
+                upsert=True
+            )
+            
+            logger.info(f"✅ [NON-BLOCKING] No historical emails found for user {user_id}, marked as complete")
+            
+    except Exception as e:
+        logger.error(f"❌ [NON-BLOCKING] Error processing historical emails for user {user_id}: {e}", exc_info=True)
+    finally:
+        # Cancel keepalive task
+        if 'keepalive_task' in locals():
+            keepalive_task.cancel()
+            try:
+                await keepalive_task
+            except asyncio.CancelledError:
+                pass
+
+async def process_and_store_emails_non_blocking(user_id: str, emails: List[Dict], is_historical: bool = False) -> Dict[str, Any]:
+    """
+    NON-BLOCKING email processing that yields control periodically to prevent WebSocket timeouts
+    Processes emails in small batches with async yields between batches
+    """
+    processing_type = "historical-non-blocking" if is_historical else "non-blocking"
+    logger.info(f"🔄 [{processing_type.upper()}] Processing {len(emails)} emails for user {user_id}")
+    
+    try:
+        # Import here to avoid circular imports
+        from .gmail import process_and_store_emails
+        from .db import email_filter, insert_filtered_emails
+        
+        # Apply smart email filtering in smaller batches
+        batch_size = 50  # Small batches to prevent blocking
+        filtered_emails = []
+        
+        for i in range(0, len(emails), batch_size):
+            batch = emails[i:i + batch_size]
+            
+            # Filter batch
+            if ENABLE_SMART_EMAIL_FILTERING:
+                batch_filtered = await email_filter.smart_filter_emails(batch, user_id, processing_type)
+            else:
+                batch_filtered = batch
+            
+            filtered_emails.extend(batch_filtered)
+            
+            # Yield control every batch to prevent blocking WebSocket
+            await asyncio.sleep(0.1)  # Small delay to yield control
+            
+            # Progress logging
+            progress = ((i + batch_size) / len(emails)) * 100
+            if i % (batch_size * 2) == 0:  # Log every 2 batches
+                logger.info(f"🔄 [{processing_type.upper()}] Filtering progress: {progress:.1f}% ({i + len(batch)}/{len(emails)} emails)")
+        
+        logger.info(f"📊 [{processing_type.upper()}] Smart filtering: {len(emails)} → {len(filtered_emails)} emails")
+        
+        if not filtered_emails:
+            logger.info(f"📭 [{processing_type.upper()}] No emails to process after filtering")
+            return {
+                "success": True,
+                "status": "success",
+                "emails_stored": 0,
+                "promotional_filtered": len(emails),
+                "processing_type": processing_type
+            }
+        
+        # Store emails in database in batches
+        storage_result = await insert_filtered_emails_non_blocking(user_id, filtered_emails, processing_type)
+        
+        if storage_result.get("success", False):
+            stored_count = storage_result.get("inserted", 0)
+            logger.info(f"✅ [{processing_type.upper()}] Successfully stored {stored_count} emails")
+            
+            # Upload to Mem0 in batches to prevent blocking
+            if stored_count > 0:
+                await upload_emails_to_mem0_non_blocking(user_id, filtered_emails[:stored_count], processing_type)
+            
+            return {
+                "success": True,
+                "status": "success",
+                "emails_stored": stored_count,
+                "promotional_filtered": len(emails) - len(filtered_emails),
+                "financial_preserved": sum(1 for email in filtered_emails if email.get("financial", False)),
+                "processing_type": processing_type,
+                "total_count": len(emails)
+            }
+        else:
+            logger.error(f"❌ [{processing_type.upper()}] Failed to store emails: {storage_result}")
+            return {
+                "success": False,
+                "status": "error",
+                "message": f"Failed to store emails: {storage_result.get('error', 'Unknown error')}",
+                "processing_type": processing_type
+            }
+    
+    except Exception as e:
+        logger.error(f"❌ [{processing_type.upper()}] Error processing emails: {e}")
+        return {
+            "success": False,
+            "status": "error", 
+            "message": str(e),
+            "processing_type": processing_type
+        }
+
+async def insert_filtered_emails_non_blocking(user_id: str, emails: List[Dict], processing_type: str) -> Dict[str, Any]:
+    """
+    Insert emails into database in small batches to prevent blocking
+    """
+    try:
+        from .db import insert_filtered_emails
+        
+        # Process in smaller batches
+        batch_size = 25  # Very small batches for non-blocking
+        total_inserted = 0
+        
+        for i in range(0, len(emails), batch_size):
+            batch = emails[i:i + batch_size]
+            
+            # Insert batch
+            batch_result = await insert_filtered_emails(user_id, batch, processing_type)
+            
+            if batch_result.get("success", False):
+                total_inserted += batch_result.get("inserted", 0)
+            
+            # Yield control between batches
+            await asyncio.sleep(0.05)
+            
+            # Progress logging
+            if i % (batch_size * 4) == 0:  # Log every 4 batches
+                progress = ((i + batch_size) / len(emails)) * 100
+                logger.info(f"🔄 [NON-BLOCKING] Database insert progress: {progress:.1f}% ({total_inserted} emails inserted)")
+        
+        return {
+            "success": True,
+            "inserted": total_inserted,
+            "processing_type": processing_type
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ [NON-BLOCKING] Error inserting emails: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "processing_type": processing_type
+        }
+
+async def upload_emails_to_mem0_non_blocking(user_id: str, emails: List[Dict], processing_type: str):
+    """
+    Upload emails to Mem0 in small batches to prevent blocking WebSocket connections
+    Enhanced with 503 Service Unavailable handling
+    """
+    try:
+        from .mem0_agent_agno import upload_emails_to_mem0, EmailMessage
+        
+        # Convert to EmailMessage objects in batches
+        batch_size = 10  # Very small batches for Mem0 upload
+        successful_batches = 0
+        failed_batches = 0
+        service_unavailable_count = 0
+        
+        for i in range(0, len(emails), batch_size):
+            batch = emails[i:i + batch_size]
+            email_messages = []
+            
+            for email in batch:
+                try:
+                    # Handle date conversion properly
+                    date_value = email.get("date", "")
+                    if hasattr(date_value, 'isoformat'):  # It's a datetime object
+                        date_str = date_value.isoformat()
+                    elif isinstance(date_value, str):
+                        date_str = date_value
+                    else:
+                        date_str = str(date_value) if date_value else ""
+                    
+                    email_msg = EmailMessage(
+                        id=email.get("id", ""),
+                        subject=email.get("subject", ""),
+                        sender=email.get("sender", ""),
+                        snippet=email.get("snippet", ""),
+                        body=email.get("body", ""),
+                        date=date_str
+                    )
+                    email_messages.append(email_msg)
+                except Exception as e:
+                    logger.error(f"Error converting email to EmailMessage: {e}")
+                    continue
+            
+            if email_messages:
+                try:
+                    # Upload batch to Mem0 with error handling
+                    mem0_result = await upload_emails_to_mem0(user_id, email_messages)
+                    
+                    # Check if upload was successful
+                    if "successful uploads:" in mem0_result.lower():
+                        successful_batches += 1
+                    else:
+                        failed_batches += 1
+                        
+                        # Check for service unavailability
+                        if "service unavailable" in mem0_result.lower() or "503" in mem0_result:
+                            service_unavailable_count += 1
+                    
+                    # Progress logging
+                    progress = ((i + batch_size) / len(emails)) * 100
+                    if i % (batch_size * 2) == 0:  # Log every 2 batches
+                        logger.info(f"🧠 [NON-BLOCKING] Mem0 upload progress: {progress:.1f}% ({i + len(email_messages)}/{len(emails)} emails)")
+                
+                except Exception as batch_error:
+                    failed_batches += 1
+                    error_str = str(batch_error).lower()
+                    
+                    if "503" in error_str or "service temporarily unavailable" in error_str:
+                        service_unavailable_count += 1
+                        logger.warning(f"🔄 [NON-BLOCKING] Mem0 service unavailable for batch {i//batch_size + 1}")
+                    else:
+                        logger.error(f"❌ [NON-BLOCKING] Error uploading batch {i//batch_size + 1}: {batch_error}")
+            
+            # Yield control between batches to prevent blocking
+            await asyncio.sleep(0.2)  # Slightly longer delay for Mem0 API calls
+        
+        # Final summary
+        total_batches = (len(emails) + batch_size - 1) // batch_size
+        success_rate = (successful_batches / total_batches) * 100 if total_batches > 0 else 0
+        
+        if service_unavailable_count > 0:
+            logger.warning(f"⚠️ [NON-BLOCKING] Mem0 upload completed with {service_unavailable_count} service unavailable incidents")
+            logger.info(f"📊 [NON-BLOCKING] Mem0 upload summary: {successful_batches}/{total_batches} batches successful ({success_rate:.1f}%)")
+        else:
+            logger.info(f"✅ [NON-BLOCKING] Completed Mem0 upload for {len(emails)} emails - {successful_batches}/{total_batches} batches successful")
+        
+        # Update user's Mem0 sync status based on results
+        if success_rate >= 80:
+            await update_user_flags(user_id, {"mem0_sync_status": "completed"})
+        elif success_rate >= 50:
+            await update_user_flags(user_id, {"mem0_sync_status": "partial"})
+        else:
+            await update_user_flags(user_id, {"mem0_sync_status": "pending"})
+        
+    except Exception as e:
+        logger.error(f"❌ [NON-BLOCKING] Error uploading emails to Mem0: {e}")
+        
+        # Check if it's a service unavailability issue
+        if "503" in str(e) or "service temporarily unavailable" in str(e).lower():
+            logger.warning(f"🔄 [NON-BLOCKING] Mem0 service is temporarily unavailable - emails stored in MongoDB for later retry")
+            await update_user_flags(user_id, {"mem0_sync_status": "pending"})
+        else:
+            logger.error(f"❌ [NON-BLOCKING] Unexpected Mem0 error: {e}")
+            await update_user_flags(user_id, {"mem0_sync_status": "error"})
+
+async def update_user_flags(user_id: str, update_data: Dict[str, Any]):
+    """
+    Update user flags in the database
+    """
+    try:
+        users_coll = await db_manager.get_collection(user_id, "users")
+        result = await users_coll.update_one(
+            {"user_id": user_id},
+            {"$set": update_data}
+        )
+        
+        if result.matched_count > 0:
+            logger.debug(f"✅ Updated user flags for {user_id}: {update_data}")
+        else:
+            logger.warning(f"⚠️ No user found to update flags for {user_id}")
+            
+    except Exception as e:
+        logger.error(f"❌ Error updating user flags for {user_id}: {e}")
+
+async def send_keepalive_to_user_connections(user_id: str):
+    """
+    Send periodic keepalive messages to active WebSocket connections for a user
+    to prevent timeouts during background processing
+    """
+    try:
+        from .websocket import manager
+        
+        # Send keepalive every 8 seconds (before 10-second timeout)
+        while True:
+            await asyncio.sleep(8)
+            
+            # Find active connections for this user (simplified approach)
+            # In a real implementation, you'd track user->connection mapping
+            for client_id, connection in manager.active_connections.items():
+                try:
+                    await manager.send_keepalive(client_id)
+                    logger.debug(f"📡 [KEEPALIVE] Sent keepalive to connection {client_id}")
+                except Exception as e:
+                    logger.debug(f"⚠️ [KEEPALIVE] Failed to send keepalive to {client_id}: {e}")
+                    
+    except asyncio.CancelledError:
+        logger.info(f"🔄 [KEEPALIVE] Keepalive task cancelled for user {user_id}")
+        raise
+    except Exception as e:
+        logger.error(f"❌ [KEEPALIVE] Error in keepalive task for user {user_id}: {e}")

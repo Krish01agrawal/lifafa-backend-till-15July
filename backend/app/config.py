@@ -141,6 +141,17 @@ LOG_FILE_BACKUP_COUNT = 10  # increased from 5 - keep 10 backup log files
 
 # Enable intelligent caching for better performance
 ENABLE_SMART_CACHING = True
+
+# Enable smart email filtering to reduce storage and processing
+ENABLE_SMART_EMAIL_FILTERING = True
+
+# Mem0 Service Configuration
+ENABLE_MEM0_PROCESSING = True  # Enable/disable Mem0 processing (fallback to MongoDB-only)
+MEM0_SERVICE_TIMEOUT = 30  # Timeout for Mem0 service availability checks
+MEM0_RETRY_ON_503 = True  # Enable automatic retry when Mem0 returns 503 errors
+MEM0_MAX_RETRY_ATTEMPTS = 5  # Maximum retry attempts for 503 errors
+MEM0_FALLBACK_MODE = True  # Continue processing even if Mem0 fails
+
 CACHE_USER_SESSIONS = 172800  # 48 hours - user session cache
 CACHE_EMAIL_METADATA = 43200  # 12 hours - email metadata cache
 CACHE_SEARCH_RESULTS = 14400  # 4 hours - search results cache
@@ -197,6 +208,7 @@ def get_config() -> Dict[str, Any]:
         # New optimizations
         "enable_smart_caching": bool(os.getenv("ENABLE_SMART_CACHING", ENABLE_SMART_CACHING)),
         "enable_batch_processing": bool(os.getenv("ENABLE_BATCH_PROCESSING", ENABLE_BATCH_PROCESSING)),
+        "enable_smart_email_filtering": bool(os.getenv("ENABLE_SMART_EMAIL_FILTERING", ENABLE_SMART_EMAIL_FILTERING)),
         "max_concurrent_email_processing": int(os.getenv("MAX_CONCURRENT_EMAIL_PROCESSING", MAX_CONCURRENT_EMAIL_PROCESSING)),
     }
     

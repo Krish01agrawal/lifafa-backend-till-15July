@@ -337,7 +337,17 @@
     const wsUrl = `ws://${BACKEND_URL.replace(/^http:\/\//i, '')}/ws/chat`;
     ws = new WebSocket(wsUrl);
     
+    // Add connection timeout handling
+    let connectionTimeout = setTimeout(() => {
+      if (ws.readyState === WebSocket.CONNECTING) {
+        console.log("[WebSocket] ⏰ Connection timeout - closing");
+        ws.close();
+        showStatus("WebSocket connection timeout. Please try again.", 'error');
+      }
+    }, 30000); // 30 seconds instead of 10
+    
     ws.onopen = () => {
+      clearTimeout(connectionTimeout); // Clear timeout on successful connection
       console.log("[WebSocket] Connection opened, sending auth...");
       // Send only JWT token - let backend generate chatId
       ws.send(JSON.stringify({ 
@@ -356,6 +366,19 @@
       try {
         const data = JSON.parse(event.data);
         console.log("[WebSocket] Parsed data:", data);
+        
+        // Handle keepalive messages
+        if (data.type === 'keepalive') {
+          console.log("[WebSocket] 📡 Received keepalive message");
+          return; // Don't display keepalive messages
+        }
+        
+        // Handle progress messages
+        if (data.type === 'progress') {
+          console.log(`[WebSocket] 🔄 Progress: ${data.step} - ${data.message}`);
+          showStatus(`Background sync: ${data.message}`, 'info');
+          return; // Don't display progress messages in chat
+        }
         
         // Extract chatId from response
         receivedChatId = data.chatId;

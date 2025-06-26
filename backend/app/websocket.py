@@ -32,9 +32,164 @@ class ConnectionManager:
     async def send_json(self, client_id: str, message: dict):
         """Sends a JSON message to a specific client."""
         if client_id in self.active_connections:
-            await self.active_connections[client_id].send_json(message)
+            try:
+                await self.active_connections[client_id].send_json(message)
+            except Exception as e:
+                logger.error(f"Error sending message to {client_id}: {e}")
+                self.disconnect(client_id)
+
+    async def send_progress_update(self, client_id: str, step: str, message: str, progress: int = 0, data: dict = None):
+        """Send real-time progress updates to prevent connection timeout"""
+        progress_message = {
+            "type": "progress",
+            "step": step,
+            "message": message,
+            "progress": progress,
+            "timestamp": asyncio.get_event_loop().time(),
+            "data": data or {}
+        }
+        await self.send_json(client_id, progress_message)
+
+    async def send_keepalive(self, client_id: str):
+        """Send keepalive message to prevent WebSocket timeout"""
+        keepalive_message = {
+            "type": "keepalive",
+            "timestamp": asyncio.get_event_loop().time(),
+            "message": "Connection active"
+        }
+        await self.send_json(client_id, keepalive_message)
 
 manager = ConnectionManager()
+
+@router.websocket("/ws/email-sync")
+async def websocket_email_sync(websocket: WebSocket):
+    """
+    WebSocket endpoint for real-time email synchronization with progress updates
+    This prevents connection timeouts during long email processing operations
+    """
+    client_id = f"sync_{uuid.uuid4()}"
+    await manager.connect(websocket, client_id)
+    
+    try:
+        # 1. Authentication Phase
+        auth_data = await websocket.receive_json()
+        token = auth_data.get("jwt_token")
+        
+        payload = decode_jwt_token_websocket(token)
+        if not payload or "user_id" not in payload:
+            logger.warning(f"{client_id} - Email sync auth failed: Invalid token")
+            await manager.send_json(client_id, {"type": "error", "message": "Authentication failed"})
+            await websocket.close(code=1008)
+            return
+
+        user_id = payload["user_id"]
+        logger.info(f"🔄 Email sync authenticated for user: {user_id}")
+
+        # 2. Send initial connection confirmation
+        await manager.send_progress_update(
+            client_id, 
+            "connected", 
+            "Connected to email sync service", 
+            0
+        )
+
+        # 3. Start email synchronization with progress updates
+        await sync_emails_with_progress(client_id, user_id, auth_data.get("access_token"))
+
+    except WebSocketDisconnect:
+        logger.info(f"Email sync WebSocket disconnected: {client_id}")
+    except Exception as e:
+        logger.error(f"Email sync error for {client_id}: {e}", exc_info=True)
+        await manager.send_json(client_id, {
+            "type": "error", 
+            "message": f"Email sync failed: {str(e)}"
+        })
+    finally:
+        manager.disconnect(client_id)
+
+async def sync_emails_with_progress(client_id: str, user_id: str, access_token: str):
+    """
+    Perform email synchronization with real-time progress updates
+    """
+    try:
+        # Import here to avoid circular imports
+        from .main import _process_immediate_emails
+        from .db import users_collection
+        
+        # Step 1: Check user status
+        await manager.send_progress_update(
+            client_id, 
+            "checking_status", 
+            "Checking user email sync status...", 
+            10
+        )
+        
+        user = await users_collection.find_one({"user_id": user_id})
+        if not user:
+            raise Exception("User not found")
+
+        # Step 2: Start immediate email processing
+        await manager.send_progress_update(
+            client_id, 
+            "starting_sync", 
+            "Starting immediate email synchronization (1-week recent emails)...", 
+            20
+        )
+
+        # Step 3: Process emails with progress updates
+        await manager.send_progress_update(
+            client_id, 
+            "fetching_emails", 
+            "Fetching recent emails from Gmail...", 
+            30
+        )
+
+        # Run email processing with WebSocket progress updates
+        result = await _process_immediate_emails(user_id, access_token, days=7, websocket_client_id=client_id)
+        
+        if result.get("success"):
+            emails_processed = result.get("emails_processed", 0)
+            financial_transactions = result.get("financial_transactions", 0)
+            processing_time = result.get("processing_time", "0s")
+            
+            # Step 4: Success notification
+            await manager.send_progress_update(
+                client_id, 
+                "sync_complete", 
+                f"Email sync completed! {emails_processed} emails processed, {financial_transactions} financial transactions found", 
+                100,
+                {
+                    "emails_processed": emails_processed,
+                    "financial_transactions": financial_transactions,
+                    "processing_time": processing_time,
+                    "dashboard_ready": True
+                }
+            )
+            
+            # Step 5: Background sync notification
+            await manager.send_progress_update(
+                client_id, 
+                "background_starting", 
+                "Dashboard ready! Historical data will load in background...", 
+                100,
+                {
+                    "background_sync": True,
+                    "can_start_querying": True
+                }
+            )
+            
+        else:
+            await manager.send_json(client_id, {
+                "type": "error",
+                "message": f"Email sync failed: {result.get('message', 'Unknown error')}"
+            })
+
+    except Exception as e:
+        logger.error(f"Error in sync_emails_with_progress: {e}", exc_info=True)
+        await manager.send_json(client_id, {
+            "type": "error",
+            "message": f"Email sync failed: {str(e)}"
+        })
 
 @router.websocket("/ws/chat")
 async def websocket_endpoint(websocket: WebSocket):
@@ -71,6 +226,9 @@ async def handle_websocket_connection(websocket: WebSocket, provided_chat_id: st
     
     user_id = None
     chat_id = provided_chat_id or f"chat_{uuid.uuid4()}"
+    
+    # Start heartbeat task to keep connection alive during background processing
+    heartbeat_task = asyncio.create_task(send_heartbeat_periodically(client_id))
 
     try:
         # 1. Authentication Phase
@@ -159,4 +317,29 @@ async def handle_websocket_connection(websocket: WebSocket, provided_chat_id: st
         # Ensure connection is closed if an error occurs during setup
         await websocket.close(code=1011)
     finally:
+        # Cancel heartbeat task
+        heartbeat_task.cancel()
+        try:
+            await heartbeat_task
+        except asyncio.CancelledError:
+            pass
         manager.disconnect(client_id)
+
+async def send_heartbeat_periodically(client_id: str):
+    """
+    Send periodic heartbeat messages to keep WebSocket connection alive
+    """
+    try:
+        while True:
+            await asyncio.sleep(25)  # Send heartbeat every 25 seconds
+            try:
+                await manager.send_keepalive(client_id)
+                logger.debug(f"💓 [HEARTBEAT] Sent to {client_id}")
+            except Exception as e:
+                logger.debug(f"⚠️ [HEARTBEAT] Failed to send to {client_id}: {e}")
+                break
+    except asyncio.CancelledError:
+        logger.debug(f"💓 [HEARTBEAT] Task cancelled for {client_id}")
+        raise
+    except Exception as e:
+        logger.error(f"❌ [HEARTBEAT] Error in heartbeat task for {client_id}: {e}")

@@ -54,12 +54,8 @@ class DatabaseManager:
                     w="majority"
                 )
                 
-                # Test the connection
-                try:
-                    # This will raise an exception if connection fails
-                    asyncio.create_task(self._test_connection(client))
-                except:
-                    pass  # Will be handled below
+                # Connection will be tested on first use
+                # No need to test here as it's not an async context
                 
                 db_name = f"genai_gmail_chat_shard_{i}"
                 self.clients[i] = client
@@ -428,6 +424,24 @@ class SmartEmailFilter:
         
         return filtered_emails
     
+    async def smart_filter_emails(self, emails: List[Dict], user_id: str, processing_type: str = "standard") -> List[Dict]:
+        """Smart email filtering with async support for different processing types"""
+        try:
+            logger.info(f"🔍 [{processing_type.upper()}] Smart filtering {len(emails)} emails for user {user_id}")
+            
+            # Use the existing filter_email_batch method
+            filtered_emails = self.filter_email_batch(emails)
+            
+            filter_stats = self.get_filter_stats()
+            logger.info(f"📊 [{processing_type.upper()}] Filtering complete: {filter_stats}")
+            
+            return filtered_emails
+            
+        except Exception as e:
+            logger.error(f"❌ [{processing_type.upper()}] Error in smart filtering: {e}")
+            # Return original emails if filtering fails
+            return emails
+
     def get_filter_stats(self) -> Dict[str, Any]:
         """Get filtering statistics"""
         total = self.stats["total_processed"]
@@ -550,23 +564,23 @@ email_processor = CompleteEmailProcessor()
 # OPTIMIZED DATABASE OPERATIONS FOR COMPLETE DATA
 # ============================================================================
 
-async def insert_filtered_emails(user_id: str, emails_data: List[Dict]) -> Dict[str, Any]:
+async def insert_filtered_emails(user_id: str, emails_data: List[Dict], processing_type: str = "standard") -> Dict[str, Any]:
     """Insert emails with smart filtering and complete data preservation"""
     
     if not emails_data:
         logger.warning(f"⚠️ No emails provided for user {user_id}")
-        return {"inserted": 0, "filtered": 0, "financial": 0}
+        return {"success": True, "inserted": 0, "filtered": 0, "financial": 0}
     
     try:
-        logger.info(f"📧 Processing {len(emails_data)} emails with smart filtering for user {user_id}")
+        logger.info(f"📧 [{processing_type.upper()}] Processing {len(emails_data)} emails with smart filtering for user {user_id}")
         
         # Apply smart filtering
         if ENABLE_SMART_EMAIL_FILTERING:
-            logger.info(f"🎯 Applying smart email filtering for user {user_id}")
+            logger.info(f"🎯 [{processing_type.upper()}] Applying smart email filtering for user {user_id}")
             filtered_emails = email_filter.filter_email_batch(emails_data)
-            logger.info(f"🎯 Smart filtering result: {len(filtered_emails)}/{len(emails_data)} emails kept")
+            logger.info(f"🎯 [{processing_type.upper()}] Smart filtering result: {len(filtered_emails)}/{len(emails_data)} emails kept")
         else:
-            logger.info(f"⚠️ Smart filtering disabled - keeping all emails")
+            logger.info(f"⚠️ [{processing_type.upper()}] Smart filtering disabled - keeping all emails")
             filtered_emails = emails_data
         
         # Process emails with complete data extraction
@@ -593,7 +607,7 @@ async def insert_filtered_emails(user_id: str, emails_data: List[Dict]) -> Dict[
             logger.info(f"✅ Got email collection for user {user_id}")
         except Exception as db_error:
             logger.error(f"❌ Failed to get email collection for user {user_id}: {db_error}")
-            return {"inserted": 0, "filtered": 0, "financial": 0, "error": f"Database connection failed: {str(db_error)}"}
+            return {"success": False, "inserted": 0, "filtered": 0, "financial": 0, "error": f"Database connection failed: {str(db_error)}"}
         
         # Remove existing emails for user (maintain 6-month limit)
         try:
@@ -642,6 +656,7 @@ async def insert_filtered_emails(user_id: str, emails_data: List[Dict]) -> Dict[
             logger.error(f"   🔄 Processed count: {len(processed_emails)}")
         
         return {
+            "success": True,
             "inserted": total_inserted,
             "filtered": filter_stats["promotional_filtered"],
             "financial": filter_stats["financial_preserved"],
@@ -654,7 +669,7 @@ async def insert_filtered_emails(user_id: str, emails_data: List[Dict]) -> Dict[
         logger.error(f"⚠️ Error type: {type(e).__name__}")
         import traceback
         logger.error(f"⚠️ Error traceback: {traceback.format_exc()}")
-        return {"inserted": 0, "filtered": 0, "financial": 0, "error": str(e)}
+        return {"success": False, "inserted": 0, "filtered": 0, "financial": 0, "error": str(e)}
 
 async def get_financial_emails(user_id: str, limit: int = 1000) -> List[Dict]:
     """Get financial emails with complete data for transaction analysis"""

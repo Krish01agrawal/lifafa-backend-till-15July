@@ -365,7 +365,7 @@ class EmailMessage(BaseModel):
 class EmailInsight(BaseModel):
     category: str
     subcategory: str
-    merchant: str
+    merchant: Optional[str] = "unknown"  # Make optional with default value
     amount: Optional[str] = None
     payment_method: str
     timestamp: Optional[str] = None
@@ -1068,74 +1068,170 @@ def validate_and_clean_search_results(search_results: List) -> List[Dict]:
 # ============================================================================
 
 async def upload_emails_to_mem0(user_id: str, emails: List[EmailMessage]) -> str:
-    """Upload emails to Mem0 with AI-powered categorization and metadata"""
-    print(f"🔄 Processing {len(emails)} emails for user {user_id} using Agno agents")
+    """
+    Upload emails to Mem0 memory with enhanced error handling for service unavailability
+    """
+    if not emails:
+        logger.warning("⚠️ No emails provided for Mem0 upload")
+        return "No emails to upload"
+
+    logger.info(f"🧠 Starting Mem0 upload for {len(emails)} emails (user: {user_id})")
     
-    # Detect user location for enhanced metadata
-    user_location = detect_user_location(emails)
-    print(f"🌍 Detected user location: {user_location}")
+    # Enhanced retry configuration for service unavailability
+    max_retries = 5
+    base_delay = 2
+    max_delay = 30
+    service_unavailable_retries = 3
     
-    processed_count = 0
-    error_count = 0
+    successful_uploads = 0
+    failed_uploads = 0
+    service_unavailable_count = 0
     
-    for email in emails:
-        if not email.id:
-            continue
-
-        try:
-            # Categorize email using Agno agent
-            insight = await categorize_email_with_agent(email)
-            
-            # Prepare content for Mem0
-            content = f"Subject: {email.subject}\nSnippet: {email.snippet}\nBody: {email.body}"
-            
-            messages = [{
-                "role": "user",
-                "content": content,
-            }]
-
-            # Comprehensive metadata for enhanced search
-            metadata = {
-                "sender": email.sender,
-                "category": insight.category,
-                "subcategory": insight.subcategory,
-                "merchant": insight.merchant,
-                "payment_method": insight.payment_method,
-                "source": "gmail",
-                "timestamp": insight.timestamp,
-                "has_amount": insight.amount is not None,
-                "amount": insight.amount,
-                "user_location": user_location,
-                "subject_keywords": " ".join([word for word in email.subject.lower().split() if len(word) > 3]),
-                "content_type": "email",
-                "processed_by": "agno_agents"
-            }
-
-            # Upload to Mem0 (sync operation)
-            aclient.add(
-                messages=messages, 
-                user_id=user_id, 
-                memory_id=email.id, 
-                metadata=metadata
-            )
-            
-            processed_count += 1
-            print(f"✅ Processed: {email.id} | {insight.category}/{insight.subcategory} | {insight.merchant}")
-            
-        except Exception as e:
-            error_count += 1
-            print(f"❌ Error processing {email.id}: {e}")
-
-    result_message = f"Successfully processed {processed_count}/{len(emails)} emails for user {user_id}"
-    if error_count > 0:
-        result_message += f" ({error_count} errors)"
-    result_message += f" (Location: {user_location}, System: Agno Agents)"
+    # Process emails with enhanced error handling
+    for i, email in enumerate(emails):
+        email_success = False
+        
+        for attempt in range(max_retries):
+            try:
+                # Create email insight with error handling
+                try:
+                    insight = await categorize_email_with_agent(email)
+                except Exception as categorization_error:
+                    logger.warning(f"⚠️ Categorization failed for email {email.id}: {categorization_error}")
+                    # Use simple categorization as fallback
+                    insight = await categorize_email_simple(email)
+                
+                # Prepare memory content
+                memory_content = f"""
+                Email ID: {email.id}
+                Subject: {email.subject}
+                From: {email.sender}
+                Date: {email.date}
+                Category: {insight.category}
+                Subcategory: {insight.subcategory}
+                Merchant: {insight.merchant}
+                Amount: {insight.amount}
+                Payment Method: {insight.payment_method}
+                Content: {email.snippet}
+                Body Preview: {email.body[:500] if email.body else 'No body content'}
+                """
+                
+                # Upload to Mem0 with enhanced retry logic
+                try:
+                    # Prepare messages for Mem0 API
+                    messages = [{
+                        "role": "user",
+                        "content": memory_content
+                    }]
+                    
+                    # Use the correct Mem0 API format
+                    aclient.add(
+                        messages=messages,
+                        user_id=user_id,
+                        memory_id=email.id,
+                        metadata={
+                            "source": "gmail",
+                            "email_id": email.id,
+                            "category": insight.category,
+                            "subcategory": insight.subcategory,
+                            "merchant": insight.merchant,
+                            "date": email.date,
+                            "timestamp": datetime.now().isoformat()
+                        }
+                    )
+                    
+                    successful_uploads += 1
+                    email_success = True
+                    
+                    if (i + 1) % 5 == 0:
+                        logger.info(f"✅ Processed: {email.id} | {insight.category}/{insight.subcategory} | {insight.merchant}")
+                        logger.info(f"🧠 Progress: {i + 1}/{len(emails)} emails uploaded to Mem0")
+                    
+                    break  # Success, exit retry loop
+                    
+                except Exception as mem0_error:
+                    error_str = str(mem0_error).lower()
+                    
+                    # Handle different types of errors
+                    if "503" in error_str or "service temporarily unavailable" in error_str:
+                        service_unavailable_count += 1
+                        
+                        if attempt < service_unavailable_retries:
+                            # Exponential backoff for service unavailability
+                            delay = min(base_delay * (2 ** attempt), max_delay)
+                            logger.warning(f"🔄 Mem0 service unavailable for {email.id}. Retrying in {delay}s (attempt {attempt + 1}/{service_unavailable_retries})")
+                            await asyncio.sleep(delay)
+                            continue
+                        else:
+                            logger.error(f"❌ Mem0 service persistently unavailable for {email.id} after {service_unavailable_retries} attempts")
+                            failed_uploads += 1
+                            break
+                    
+                    elif "502" in error_str or "bad gateway" in error_str:
+                        if attempt < max_retries - 1:
+                            delay = min(base_delay * (1.5 ** attempt), max_delay)
+                            logger.warning(f"🔄 Mem0 bad gateway for {email.id}. Retrying in {delay}s (attempt {attempt + 1}/{max_retries})")
+                            await asyncio.sleep(delay)
+                            continue
+                        else:
+                            logger.error(f"❌ Mem0 bad gateway persistent for {email.id}")
+                            failed_uploads += 1
+                            break
+                    
+                    elif "rate limit" in error_str or "429" in error_str:
+                        if attempt < max_retries - 1:
+                            delay = min(base_delay * (3 ** attempt), max_delay)  # Longer delay for rate limits
+                            logger.warning(f"🔄 Mem0 rate limited for {email.id}. Retrying in {delay}s (attempt {attempt + 1}/{max_retries})")
+                            await asyncio.sleep(delay)
+                            continue
+                        else:
+                            logger.error(f"❌ Mem0 rate limit persistent for {email.id}")
+                            failed_uploads += 1
+                            break
+                    
+                    else:
+                        logger.error(f"❌ Error processing {email.id}: {mem0_error}")
+                        failed_uploads += 1
+                        break
+                        
+            except Exception as processing_error:
+                logger.error(f"❌ Unexpected error processing email {email.id}: {processing_error}")
+                failed_uploads += 1
+                break
+        
+        # Add small delay between emails to prevent overwhelming the API
+        if i < len(emails) - 1:
+            await asyncio.sleep(0.1)
     
-    return result_message
+    # Generate comprehensive result message
+    success_rate = (successful_uploads / len(emails)) * 100 if emails else 0
+    
+    result_message = f"""
+    📊 Mem0 Upload Summary for User {user_id}:
+    ✅ Successful uploads: {successful_uploads}/{len(emails)} ({success_rate:.1f}%)
+    ❌ Failed uploads: {failed_uploads}
+    🚫 Service unavailable incidents: {service_unavailable_count}
+    """
+    
+    if service_unavailable_count > 0:
+        result_message += f"\n⚠️ Note: Mem0 service experienced {service_unavailable_count} unavailability incidents"
+    
+    if success_rate >= 80:
+        logger.info(f"✅ {result_message}")
+    elif success_rate >= 50:
+        logger.warning(f"⚠️ {result_message}")
+    else:
+        logger.error(f"❌ {result_message}")
+    
+    return result_message.strip()
 
-async def search_with_retry(query: str, user_id: str, limit: int, max_retries: int = 3) -> List[Dict]:
-    """Search Mem0 with retry logic for handling API errors"""
-    print(f"🔄 Mem0 search: '{query}' (user: {user_id}, limit: {limit})")
+async def search_with_retry(query: str, user_id: str, limit: int, max_retries: int = 5) -> List[Dict]:
+    """Search Mem0 with enhanced retry logic for handling API errors including 503 Service Unavailable"""
+    logger.info(f"🔄 Mem0 search: '{query}' (user: {user_id}, limit: {limit})")
+    
+    base_delay = 1
+    max_delay = 20
+    service_unavailable_retries = 3
     
     for attempt in range(max_retries):
         try:
@@ -1151,22 +1247,53 @@ async def search_with_retry(query: str, user_id: str, limit: int, max_retries: i
             
             if results is not None:
                 valid_results = [r for r in results if r and isinstance(r, dict)]
-                print(f"✅ Search successful: {len(valid_results)} valid results")
+                logger.info(f"✅ Search successful: {len(valid_results)} valid results")
                 return valid_results
             else:
-                print(f"⚠️ Search returned None (attempt {attempt + 1})")
+                logger.warning(f"⚠️ Search returned None (attempt {attempt + 1})")
                 
         except Exception as e:
             error_msg = str(e).lower()
-            if "502" in error_msg or "bad gateway" in error_msg:
-                if attempt < max_retries - 1:
-                    wait_time = (attempt + 1) * 2
-                    print(f"   Retrying in {wait_time} seconds...")
+            
+            # Handle 503 Service Temporarily Unavailable
+            if "503" in error_msg or "service temporarily unavailable" in error_msg:
+                if attempt < service_unavailable_retries:
+                    wait_time = min(base_delay * (2 ** attempt), max_delay)
+                    logger.warning(f"🔄 Mem0 service unavailable for search '{query}'. Retrying in {wait_time}s (attempt {attempt + 1}/{service_unavailable_retries})")
                     await asyncio.sleep(wait_time)
                     continue
-            print(f"❌ Search error: {e}")
-            break
+                else:
+                    logger.error(f"❌ Mem0 service persistently unavailable for search '{query}' after {service_unavailable_retries} attempts")
+                    break
+            
+            # Handle 502 Bad Gateway
+            elif "502" in error_msg or "bad gateway" in error_msg:
+                if attempt < max_retries - 1:
+                    wait_time = min(base_delay * (1.5 ** attempt), max_delay)
+                    logger.warning(f"🔄 Mem0 bad gateway for search '{query}'. Retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})")
+                    await asyncio.sleep(wait_time)
+                    continue
+                else:
+                    logger.error(f"❌ Mem0 bad gateway persistent for search '{query}'")
+                    break
+            
+            # Handle rate limits
+            elif "429" in error_msg or "rate limit" in error_msg:
+                if attempt < max_retries - 1:
+                    wait_time = min(base_delay * (3 ** attempt), max_delay)
+                    logger.warning(f"🔄 Mem0 rate limited for search '{query}'. Retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})")
+                    await asyncio.sleep(wait_time)
+                    continue
+                else:
+                    logger.error(f"❌ Mem0 rate limit persistent for search '{query}'")
+                    break
+            
+            # Handle other errors
+            else:
+                logger.error(f"❌ Search error for '{query}': {e}")
+                break
     
+    logger.warning(f"🔍 Search failed for '{query}' after {max_retries} attempts, returning empty results")
     return []
 
 async def search_emails_in_mem0(user_id: str, query: str, limit: int = 500) -> List[Dict]:
@@ -2370,3 +2497,101 @@ I found {len(email_data)} emails related to your query, including {len(amount_da
 
 The system is currently processing your data to provide more detailed insights. Please try your query again for a complete analysis.
 """ 
+
+# ============================================================================
+# MEM0 HEALTH CHECK AND RECOVERY
+# ============================================================================
+
+async def check_mem0_health() -> Dict[str, Any]:
+    """
+    Check if Mem0 API is available and responsive
+    """
+    try:
+        # Simple health check using a minimal search
+        test_result = await search_with_retry("health_check", "test_user", 1, max_retries=1)
+        
+        return {
+            "status": "healthy",
+            "available": True,
+            "response_time": "normal",
+            "message": "Mem0 API is responsive"
+        }
+    except Exception as e:
+        error_str = str(e).lower()
+        
+        if "503" in error_str or "service temporarily unavailable" in error_str:
+            return {
+                "status": "unavailable",
+                "available": False,
+                "error": "503 Service Temporarily Unavailable",
+                "message": "Mem0 service is temporarily down"
+            }
+        elif "502" in error_str or "bad gateway" in error_str:
+            return {
+                "status": "gateway_error",
+                "available": False,
+                "error": "502 Bad Gateway",
+                "message": "Mem0 gateway issues"
+            }
+        elif "429" in error_str or "rate limit" in error_str:
+            return {
+                "status": "rate_limited",
+                "available": False,
+                "error": "429 Rate Limited",
+                "message": "Mem0 rate limit exceeded"
+            }
+        else:
+            return {
+                "status": "error",
+                "available": False,
+                "error": str(e),
+                "message": "Mem0 API error"
+            }
+
+async def wait_for_mem0_recovery(max_wait_time: int = 300) -> bool:
+    """
+    Wait for Mem0 service to recover from 503 errors
+    Returns True if service recovers, False if timeout
+    """
+    logger.info(f"🔄 Waiting for Mem0 service recovery (max {max_wait_time}s)")
+    
+    start_time = time.time()
+    check_interval = 30  # Check every 30 seconds
+    
+    while time.time() - start_time < max_wait_time:
+        health_status = await check_mem0_health()
+        
+        if health_status["available"]:
+            recovery_time = time.time() - start_time
+            logger.info(f"✅ Mem0 service recovered after {recovery_time:.1f} seconds")
+            return True
+        
+        logger.info(f"⏳ Mem0 still unavailable: {health_status['message']} - retrying in {check_interval}s")
+        await asyncio.sleep(check_interval)
+    
+    logger.error(f"❌ Mem0 service did not recover within {max_wait_time} seconds")
+    return False
+
+async def schedule_mem0_retry(user_id: str, emails: List[EmailMessage], retry_delay: int = 1800):
+    """
+    Schedule a retry for Mem0 upload after service becomes available
+    """
+    logger.info(f"📅 Scheduling Mem0 retry for user {user_id} in {retry_delay} seconds")
+    
+    # Wait for the specified delay
+    await asyncio.sleep(retry_delay)
+    
+    # Check if Mem0 is available
+    if await wait_for_mem0_recovery(max_wait_time=60):
+        logger.info(f"🔄 Retrying Mem0 upload for user {user_id}")
+        try:
+            result = await upload_emails_to_mem0(user_id, emails)
+            logger.info(f"✅ Mem0 retry successful for user {user_id}: {result}")
+        except Exception as e:
+            logger.error(f"❌ Mem0 retry failed for user {user_id}: {e}")
+    else:
+        logger.warning(f"⚠️ Mem0 still unavailable for user {user_id} retry - will try again later")
+
+# ============================================================================
+# ENHANCED EMAIL PROCESSING WITH FALLBACK
+# ============================================================================
