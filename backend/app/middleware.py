@@ -4,6 +4,13 @@ Middleware for Scalability and Resource Management
 
 This module provides middleware for rate limiting, resource management,
 and scalability controls for the Gmail Chatbot backend.
+
+Recent Optimizations (2025-06-23):
+- Enhanced resource management for 200 concurrent users
+- Intelligent user queuing system
+- Smart memory management and cleanup
+- Advanced performance monitoring
+- Optimized rate limiting algorithms
 """
 
 import asyncio
@@ -11,146 +18,224 @@ import time
 import psutil
 import logging
 from collections import defaultdict, deque
-from typing import Dict, Set, Optional, Tuple
+from typing import Dict, Set, Optional, Tuple, List
 from fastapi import Request, HTTPException, status
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
+import json
+import threading
 
 from .config import (
     GMAIL_API_RATE_LIMIT, GMAIL_API_WINDOW_SECONDS, CONCURRENT_USERS_LIMIT,
     MAX_MEMORY_USAGE, EMAIL_PROCESSING_TIMEOUT, MAX_REQUESTS_PER_MINUTE,
-    MAX_CONCURRENT_REQUESTS, MEMORY_WARNING_THRESHOLD, CPU_WARNING_THRESHOLD
+    MAX_CONCURRENT_REQUESTS, MEMORY_WARNING_THRESHOLD, CPU_WARNING_THRESHOLD,
+    ENABLE_SMART_CACHING, MAX_CACHE_SIZE_MB
 )
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
 # ============================================================================
-# GLOBAL STATE MANAGEMENT
+# ENHANCED RESOURCE MANAGEMENT
 # ============================================================================
 
-class ResourceManager:
-    """Manages system resources and user limits"""
+class EnhancedResourceManager:
+    """Advanced resource manager with intelligent queuing and monitoring"""
     
     def __init__(self):
-        # Rate limiting tracking
+        # Enhanced rate limiting tracking
         self.user_requests: Dict[str, deque] = defaultdict(lambda: deque())
         self.gmail_api_calls: Dict[str, deque] = defaultdict(lambda: deque())
         
-        # Concurrent processing tracking
+        # Advanced concurrent processing tracking
         self.active_users: Set[str] = set()
+        self.queued_users: List[str] = []  # Queue for users waiting for resources
         self.user_concurrent_requests: Dict[str, int] = defaultdict(int)
         self.processing_start_times: Dict[str, float] = {}
+        self.user_priorities: Dict[str, int] = defaultdict(lambda: 1)  # 1=normal, 2=premium
         
-        # Memory tracking
+        # Enhanced memory tracking
         self.user_memory_usage: Dict[str, float] = defaultdict(float)
+        self.total_memory_allocated = 0
+        self.memory_cleanup_threshold = MAX_MEMORY_USAGE * 0.8  # Cleanup at 80%
         
-        # System monitoring
+        # System monitoring with history
         self.last_system_check = 0
-        self.system_check_interval = 30  # seconds
+        self.system_check_interval = 15  # Check every 15 seconds for better responsiveness
+        self.performance_history = deque(maxlen=100)  # Keep last 100 performance snapshots
         
-    async def check_system_resources(self) -> Tuple[bool, str]:
-        """Check if system has enough resources"""
+        # Smart caching integration
+        self.cache_hits = 0
+        self.cache_misses = 0
+        
+        # Threading lock for thread-safe operations
+        self.lock = threading.RLock()
+        
+        logger.info(f"🚀 Enhanced Resource Manager initialized")
+        logger.info(f"📊 Capacity: {CONCURRENT_USERS_LIMIT} concurrent users")
+        logger.info(f"🧠 Memory limit per user: {MAX_MEMORY_USAGE}MB")
+        
+    async def check_system_resources(self) -> Tuple[bool, str, Dict]:
+        """Enhanced system resource checking with detailed metrics"""
         current_time = time.time()
         
-        # Only check every 30 seconds to avoid overhead
+        # Only check every 15 seconds to avoid overhead
         if current_time - self.last_system_check < self.system_check_interval:
-            return True, "OK"
-            
+            return True, "OK", {}
+        
         try:
-            # Check memory usage
+            # Get detailed system metrics
             memory = psutil.virtual_memory()
             memory_percent = memory.percent
+            available_memory_mb = memory.available / (1024 * 1024)
             
-            # Check CPU usage
-            cpu_percent = psutil.cpu_percent(interval=1)
+            # Get CPU usage with short interval for accuracy
+            cpu_percent = psutil.cpu_percent(interval=0.1)
+            
+            # Get disk usage
+            disk = psutil.disk_usage('/')
+            disk_percent = disk.percent
+            
+            # Calculate our application's memory usage
+            app_memory_mb = sum(self.user_memory_usage.values())
             
             self.last_system_check = current_time
             
-            # Log warnings if resources are high
+            # Create performance snapshot
+            perf_snapshot = {
+                'timestamp': current_time,
+                'memory_percent': memory_percent,
+                'cpu_percent': cpu_percent,
+                'disk_percent': disk_percent,
+                'active_users': len(self.active_users),
+                'queued_users': len(self.queued_users),
+                'app_memory_mb': app_memory_mb,
+                'available_memory_mb': available_memory_mb
+            }
+            
+            # Add to history
+            self.performance_history.append(perf_snapshot)
+            
+            # Advanced warning thresholds
             if memory_percent > MEMORY_WARNING_THRESHOLD:
-                logger.warning(f"High memory usage: {memory_percent:.1f}%")
+                logger.warning(f"🔥 High memory usage: {memory_percent:.1f}%")
                 
             if cpu_percent > CPU_WARNING_THRESHOLD:
-                logger.warning(f"High CPU usage: {cpu_percent:.1f}%")
+                logger.warning(f"⚡ High CPU usage: {cpu_percent:.1f}%")
             
-            # Block new requests if resources are critically low
-            if memory_percent > 95:
-                return False, "System memory critically low"
+            if disk_percent > 90:
+                logger.warning(f"💾 High disk usage: {disk_percent:.1f}%")
+            
+            # Intelligent resource protection
+            if memory_percent > 95 or available_memory_mb < 500:
+                return False, "System memory critically low", perf_snapshot
                 
-            if cpu_percent > 95:
-                return False, "System CPU critically high"
+            if cpu_percent > 98:
+                return False, "System CPU critically high", perf_snapshot
                 
-            return True, "OK"
+            if app_memory_mb > MAX_CACHE_SIZE_MB * 10:  # If app uses 10x cache size
+                logger.warning("🧹 Triggering memory cleanup due to high app usage")
+                await self.cleanup_memory()
+                
+            return True, "OK", perf_snapshot
             
         except Exception as e:
             logger.error(f"Error checking system resources: {e}")
-            return True, "OK"  # Allow requests if we can't check
+            return True, "OK", {}  # Allow requests if we can't check
     
-    def check_rate_limit(self, user_id: str, endpoint_type: str = "general") -> bool:
-        """Check if user has exceeded rate limits"""
+    def check_rate_limit_enhanced(self, user_id: str, endpoint_type: str = "general") -> Tuple[bool, int]:
+        """Enhanced rate limiting with priority and burst handling"""
         current_time = time.time()
+        user_priority = self.user_priorities[user_id]
         
-        if endpoint_type == "gmail_api":
-            # Gmail API specific rate limiting
-            user_calls = self.gmail_api_calls[user_id]
-            
-            # Remove old calls outside the window
-            while user_calls and current_time - user_calls[0] > GMAIL_API_WINDOW_SECONDS:
-                user_calls.popleft()
-            
-            # Check if limit exceeded
-            if len(user_calls) >= GMAIL_API_RATE_LIMIT:
-                return False
+        with self.lock:
+            if endpoint_type == "gmail_api":
+                # Gmail API specific rate limiting with priority adjustment
+                user_calls = self.gmail_api_calls[user_id]
+                rate_limit = GMAIL_API_RATE_LIMIT * user_priority  # Premium users get 2x limit
+                window = GMAIL_API_WINDOW_SECONDS
                 
-            # Add current call
-            user_calls.append(current_time)
-            
-        else:
-            # General API rate limiting
-            user_requests = self.user_requests[user_id]
-            
-            # Remove old requests outside 1-minute window
-            while user_requests and current_time - user_requests[0] > 60:
-                user_requests.popleft()
-            
-            # Check if limit exceeded
-            if len(user_requests) >= MAX_REQUESTS_PER_MINUTE:
-                return False
+                # Remove old calls outside the window
+                while user_calls and current_time - user_calls[0] > window:
+                    user_calls.popleft()
                 
-            # Add current request
-            user_requests.append(current_time)
+                # Check if limit exceeded
+                if len(user_calls) >= rate_limit:
+                    remaining_time = int(window - (current_time - user_calls[0]))
+                    return False, remaining_time
+                    
+                # Add current call
+                user_calls.append(current_time)
+                
+            else:
+                # General API rate limiting with burst allowance
+                user_requests = self.user_requests[user_id]
+                rate_limit = MAX_REQUESTS_PER_MINUTE * user_priority
+                
+                # Remove old requests outside 1-minute window
+                while user_requests and current_time - user_requests[0] > 60:
+                    user_requests.popleft()
+                
+                # Check if limit exceeded
+                if len(user_requests) >= rate_limit:
+                    remaining_time = int(60 - (current_time - user_requests[0]))
+                    return False, remaining_time
+                    
+                # Add current request
+                user_requests.append(current_time)
         
-        return True
+        return True, 0
     
-    def check_concurrent_users(self, user_id: str) -> bool:
-        """Check if we can accept another concurrent user"""
-        if user_id in self.active_users:
-            return True  # User already active
+    async def request_processing_slot(self, user_id: str) -> Tuple[bool, str]:
+        """Intelligent processing slot allocation with queuing"""
+        
+        with self.lock:
+            # Check if user is already active
+            if user_id in self.active_users:
+                return True, "Already active"
             
-        if len(self.active_users) >= CONCURRENT_USERS_LIMIT:
-            return False
+            # Check if we have immediate capacity
+            if len(self.active_users) < CONCURRENT_USERS_LIMIT:
+                self.active_users.add(user_id)
+                self.processing_start_times[user_id] = time.time()
+                logger.info(f"✅ User {user_id} allocated processing slot immediately")
+                return True, "Slot allocated"
             
-        return True
+            # Add to priority queue if not already queued
+            if user_id not in self.queued_users:
+                # Priority users go to front of queue
+                if self.user_priorities[user_id] > 1:
+                    self.queued_users.insert(0, user_id)
+                else:
+                    self.queued_users.append(user_id)
+                
+                logger.info(f"⏳ User {user_id} added to queue (position: {self.queued_users.index(user_id) + 1})")
+            
+            return False, f"Queued (position: {self.queued_users.index(user_id) + 1})"
+    
+    def release_processing_slot(self, user_id: str):
+        """Release processing slot and allocate to next user in queue"""
+        
+        with self.lock:
+            if user_id in self.active_users:
+                self.active_users.remove(user_id)
+                self.processing_start_times.pop(user_id, None)
+                self.user_memory_usage.pop(user_id, 0)
+                
+                logger.info(f"🔓 User {user_id} released processing slot")
+                
+                # Allocate slot to next user in queue
+                if self.queued_users:
+                    next_user = self.queued_users.pop(0)
+                    self.active_users.add(next_user)
+                    self.processing_start_times[next_user] = time.time()
+                    logger.info(f"➡️ Processing slot allocated to queued user {next_user}")
     
     def check_user_concurrent_requests(self, user_id: str) -> bool:
-        """Check if user has too many concurrent requests"""
-        return self.user_concurrent_requests[user_id] < MAX_CONCURRENT_REQUESTS
-    
-    def start_user_processing(self, user_id: str) -> bool:
-        """Start tracking user processing"""
-        if not self.check_concurrent_users(user_id):
-            return False
-            
-        self.active_users.add(user_id)
-        self.processing_start_times[user_id] = time.time()
-        return True
-    
-    def end_user_processing(self, user_id: str):
-        """End tracking user processing"""
-        self.active_users.discard(user_id)
-        self.processing_start_times.pop(user_id, None)
-        self.user_memory_usage.pop(user_id, 0)
+        """Enhanced concurrent request checking"""
+        max_concurrent = MAX_CONCURRENT_REQUESTS * self.user_priorities[user_id]
+        return self.user_concurrent_requests[user_id] < max_concurrent
     
     def check_processing_timeout(self, user_id: str) -> bool:
         """Check if user processing has timed out"""
@@ -158,43 +243,130 @@ class ResourceManager:
             return False
             
         elapsed = time.time() - self.processing_start_times[user_id]
-        return elapsed > EMAIL_PROCESSING_TIMEOUT
+        timeout = EMAIL_PROCESSING_TIMEOUT * self.user_priorities[user_id]  # Premium users get longer timeout
+        return elapsed > timeout
     
     def update_user_memory(self, user_id: str, memory_mb: float):
-        """Update user memory usage"""
-        self.user_memory_usage[user_id] = memory_mb
-        
-        if memory_mb > MAX_MEMORY_USAGE:
-            logger.warning(f"User {user_id} exceeding memory limit: {memory_mb}MB")
-    
-    def get_stats(self) -> Dict:
-        """Get current resource usage stats"""
-        try:
-            memory = psutil.virtual_memory()
-            cpu_percent = psutil.cpu_percent()
+        """Enhanced user memory tracking with automatic cleanup"""
+        with self.lock:
+            old_memory = self.user_memory_usage.get(user_id, 0)
+            self.user_memory_usage[user_id] = memory_mb
+            self.total_memory_allocated += (memory_mb - old_memory)
             
-            return {
-                "active_users": len(self.active_users),
-                "concurrent_limit": CONCURRENT_USERS_LIMIT,
-                "system_memory_percent": memory.percent,
-                "system_cpu_percent": cpu_percent,
-                "total_user_memory_mb": sum(self.user_memory_usage.values()),
-                "active_user_list": list(self.active_users)
-            }
+            memory_limit = MAX_MEMORY_USAGE * self.user_priorities[user_id]
+            
+            if memory_mb > memory_limit:
+                logger.warning(f"🔥 User {user_id} exceeding memory limit: {memory_mb}MB > {memory_limit}MB")
+                
+            # Trigger cleanup if total memory is high
+            if self.total_memory_allocated > self.memory_cleanup_threshold * len(self.active_users):
+                asyncio.create_task(self.cleanup_memory())
+    
+    async def cleanup_memory(self):
+        """Intelligent memory cleanup"""
+        try:
+            logger.info("🧹 Starting intelligent memory cleanup...")
+            
+            # Force garbage collection
+            import gc
+            gc.collect()
+            
+            # Clean up expired cache entries if caching is enabled
+            if ENABLE_SMART_CACHING:
+                try:
+                    from .mem0_agent_agno import smart_cache
+                    smart_cache.cleanup_expired()
+                    logger.info("✅ Cache cleanup completed")
+                except Exception as e:
+                    logger.error(f"Cache cleanup error: {e}")
+            
+            # Reset total memory counter
+            with self.lock:
+                self.total_memory_allocated = sum(self.user_memory_usage.values())
+            
+            logger.info("✅ Memory cleanup completed")
+            
         except Exception as e:
-            logger.error(f"Error getting stats: {e}")
+            logger.error(f"Error during memory cleanup: {e}")
+    
+    def set_user_priority(self, user_id: str, priority: int = 1):
+        """Set user priority (1=normal, 2=premium)"""
+        with self.lock:
+            self.user_priorities[user_id] = priority
+            logger.info(f"👑 User {user_id} priority set to {priority}")
+    
+    def get_enhanced_stats(self) -> Dict:
+        """Get comprehensive resource usage statistics"""
+        try:
+            current_time = time.time()
+            
+            with self.lock:
+                # Calculate average performance over last 10 snapshots
+                recent_snapshots = list(self.performance_history)[-10:]
+                avg_memory = sum(s['memory_percent'] for s in recent_snapshots) / len(recent_snapshots) if recent_snapshots else 0
+                avg_cpu = sum(s['cpu_percent'] for s in recent_snapshots) / len(recent_snapshots) if recent_snapshots else 0
+                
+                # Get queue statistics
+                queue_wait_times = []
+                for i, user_id in enumerate(self.queued_users):
+                    # Estimate wait time based on queue position
+                    estimated_wait = i * 30  # Assume 30 seconds per user ahead
+                    queue_wait_times.append(estimated_wait)
+                
+                stats = {
+                    "active_users": len(self.active_users),
+                    "queued_users": len(self.queued_users),
+                    "concurrent_limit": CONCURRENT_USERS_LIMIT,
+                    "capacity_utilization_percent": (len(self.active_users) / CONCURRENT_USERS_LIMIT) * 100,
+                    
+                    "memory": {
+                        "current_percent": avg_memory,
+                        "app_usage_mb": self.total_memory_allocated,
+                        "warning_threshold": MEMORY_WARNING_THRESHOLD,
+                        "users_over_limit": len([u for u, m in self.user_memory_usage.items() if m > MAX_MEMORY_USAGE])
+                    },
+                    
+                    "cpu": {
+                        "current_percent": avg_cpu,
+                        "warning_threshold": CPU_WARNING_THRESHOLD
+                    },
+                    
+                    "queue": {
+                        "length": len(self.queued_users),
+                        "average_wait_time_seconds": sum(queue_wait_times) / len(queue_wait_times) if queue_wait_times else 0,
+                        "max_wait_time_seconds": max(queue_wait_times) if queue_wait_times else 0
+                    },
+                    
+                    "rate_limiting": {
+                        "gmail_api_calls_per_user": {k: len(v) for k, v in self.gmail_api_calls.items()},
+                        "general_requests_per_user": {k: len(v) for k, v in self.user_requests.items()}
+                    },
+                    
+                    "user_priorities": dict(self.user_priorities),
+                    "active_user_list": list(self.active_users),
+                    "queued_user_list": self.queued_users.copy(),
+                    
+                    "performance_history_points": len(self.performance_history),
+                    "last_system_check": self.last_system_check,
+                    "timestamp": current_time
+                }
+                
+                return stats
+                
+        except Exception as e:
+            logger.error(f"Error getting enhanced stats: {e}")
             return {"error": str(e)}
 
-# Global resource manager instance
-resource_manager = ResourceManager()
+# Global enhanced resource manager instance
+resource_manager = EnhancedResourceManager()
 
 # ============================================================================
-# MIDDLEWARE FUNCTIONS
+# ENHANCED MIDDLEWARE FUNCTIONS
 # ============================================================================
 
 @asynccontextmanager
 async def request_context(user_id: str, request_type: str = "general"):
-    """Context manager for tracking request lifecycle"""
+    """Enhanced context manager for tracking request lifecycle"""
     
     # Increment concurrent request counter
     resource_manager.user_concurrent_requests[user_id] += 1
@@ -204,186 +376,193 @@ async def request_context(user_id: str, request_type: str = "general"):
     finally:
         # Decrement concurrent request counter
         resource_manager.user_concurrent_requests[user_id] -= 1
-        if resource_manager.user_concurrent_requests[user_id] <= 0:
-            resource_manager.user_concurrent_requests.pop(user_id, None)
 
-async def rate_limit_middleware(request: Request, call_next):
-    """Middleware for rate limiting and resource management"""
+async def enhanced_rate_limit_middleware(request: Request, call_next):
+    """Enhanced middleware with intelligent queuing and monitoring"""
     
-    # Skip middleware for health checks and static files
-    if request.url.path in ["/health", "/metrics", "/docs", "/openapi.json"]:
-        return await call_next(request)
+    start_time = time.time()
     
     try:
+        # Extract user ID from request
+        user_id = await extract_user_id(request)
+        
+        if not user_id:
+            # Allow non-authenticated requests (login, health checks, etc.)
+            response = await call_next(request)
+            return response
+        
         # Check system resources first
-        system_ok, system_message = await resource_manager.check_system_resources()
-        if not system_ok:
+        resource_ok, resource_msg, perf_data = await resource_manager.check_system_resources()
+        if not resource_ok:
+            logger.error(f"🚨 System resource limit exceeded: {resource_msg}")
             return JSONResponse(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                status_code=503,
                 content={
-                    "error": "Service temporarily unavailable",
-                    "message": system_message,
-                    "retry_after": 60
+                    "error": "System temporarily overloaded",
+                    "message": resource_msg,
+                    "retry_after": 30,
+                    "performance_data": perf_data
                 }
             )
         
-        # Extract user_id from request (JWT token, query params, etc.)
-        user_id = await extract_user_id(request)
+        # Check rate limits
+        endpoint_type = "gmail_api" if "/gmail/" in str(request.url) else "general"
+        rate_ok, retry_after = resource_manager.check_rate_limit_enhanced(user_id, endpoint_type)
         
-        if user_id:
-            # Determine endpoint type for rate limiting
-            endpoint_type = "gmail_api" if "/gmail/" in request.url.path else "general"
+        if not rate_ok:
+            logger.warning(f"⚠️ Rate limit exceeded for user {user_id} on {endpoint_type}")
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "error": "Rate limit exceeded",
+                    "retry_after": retry_after,
+                    "endpoint_type": endpoint_type
+                }
+            )
+        
+        # Check concurrent requests
+        if not resource_manager.check_user_concurrent_requests(user_id):
+            logger.warning(f"⚠️ Too many concurrent requests for user {user_id}")
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "error": "Too many concurrent requests",
+                    "retry_after": 5
+                }
+            )
+        
+        # For processing-intensive endpoints, check for processing slot
+        if any(path in str(request.url) for path in ["/gmail/fetch", "/financial/process"]):
+            slot_ok, slot_msg = await resource_manager.request_processing_slot(user_id)
             
-            # Check rate limits
-            if not resource_manager.check_rate_limit(user_id, endpoint_type):
+            if not slot_ok:
                 return JSONResponse(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    status_code=202,  # Accepted but queued
                     content={
-                        "error": "Rate limit exceeded",
-                        "message": f"Too many requests. Limit: {GMAIL_API_RATE_LIMIT if endpoint_type == 'gmail_api' else MAX_REQUESTS_PER_MINUTE} per {'100 seconds' if endpoint_type == 'gmail_api' else 'minute'}",
-                        "retry_after": GMAIL_API_WINDOW_SECONDS if endpoint_type == "gmail_api" else 60
+                        "status": "queued",
+                        "message": slot_msg,
+                        "estimated_wait_seconds": len(resource_manager.queued_users) * 30
                     }
                 )
-            
-            # Check concurrent requests per user
-            if not resource_manager.check_user_concurrent_requests(user_id):
-                return JSONResponse(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    content={
-                        "error": "Too many concurrent requests",
-                        "message": f"Maximum {MAX_CONCURRENT_REQUESTS} concurrent requests per user",
-                        "retry_after": 30
-                    }
-                )
-            
-            # Check processing timeout for long-running operations
-            if resource_manager.check_processing_timeout(user_id):
-                resource_manager.end_user_processing(user_id)
-                return JSONResponse(
-                    status_code=status.HTTP_408_REQUEST_TIMEOUT,
-                    content={
-                        "error": "Processing timeout",
-                        "message": f"Processing exceeded {EMAIL_PROCESSING_TIMEOUT} seconds timeout",
-                        "suggestion": "Try processing smaller batches"
-                    }
-                )
-            
-            # Use request context for tracking
-            async with request_context(user_id):
-                response = await call_next(request)
-                return response
-        else:
-            # No user_id found, proceed without user-specific limits
+        
+        # Process request with context
+        async with request_context(user_id, endpoint_type):
             response = await call_next(request)
-            return response
-            
+        
+        # Add performance headers
+        processing_time = time.time() - start_time
+        response.headers["X-Processing-Time"] = str(round(processing_time, 3))
+        response.headers["X-User-Queue-Position"] = "0"  # Active user
+        response.headers["X-System-Load"] = str(round(len(resource_manager.active_users) / CONCURRENT_USERS_LIMIT * 100, 1))
+        
+        return response
+        
     except Exception as e:
-        logger.error(f"Error in rate limit middleware: {e}")
-        # Don't block requests due to middleware errors
+        logger.error(f"❌ Middleware error: {e}")
+        # Return original response on middleware error
         return await call_next(request)
+    finally:
+        # Cleanup on processing-intensive endpoints
+        if user_id and any(path in str(request.url) for path in ["/gmail/fetch", "/financial/process"]):
+            resource_manager.release_processing_slot(user_id)
+
+# ============================================================================
+# BACKWARD COMPATIBILITY
+# ============================================================================
+
+# Keep original function names for backward compatibility
+rate_limit_middleware = enhanced_rate_limit_middleware
 
 async def extract_user_id(request: Request) -> Optional[str]:
-    """Extract user_id from request for rate limiting"""
+    """Extract user ID from request with enhanced JWT handling"""
     try:
-        # Try to get from JWT token in Authorization header
+        # Check authorization header
         auth_header = request.headers.get("authorization")
         if auth_header and auth_header.startswith("Bearer "):
+            # Extract user ID from JWT token
             from .auth import decode_jwt_token
             token = auth_header.split(" ")[1]
-            user_data = decode_jwt_token(token)
-            return user_data.get("user_id")
+            payload = decode_jwt_token(token)
+            if payload:
+                return payload.get("user_id")
         
-        # Try to get from query parameters
-        jwt_token = request.query_params.get("jwt_token")
-        if jwt_token:
-            from .auth import decode_jwt_token
-            user_data = decode_jwt_token(jwt_token)
-            return user_data.get("user_id")
-        
-        # Try to get from request body (for POST requests)
+        # Check request body for JWT token (for POST requests)
         if request.method == "POST":
-            # This is a bit tricky as we need to read the body
-            # For now, we'll skip body parsing to avoid consuming the request
-            pass
-            
+            try:
+                body = await request.body()
+                if body:
+                    body_data = json.loads(body)
+                    if "jwt_token" in body_data:
+                        from .auth import decode_jwt_token
+                        payload = decode_jwt_token(body_data["jwt_token"])
+                        if payload:
+                            return payload.get("user_id")
+            except:
+                pass  # Not JSON or no JWT token in body
+        
         return None
         
     except Exception as e:
-        logger.error(f"Error extracting user_id: {e}")
+        logger.error(f"Error extracting user ID: {e}")
         return None
-
-# ============================================================================
-# PROCESSING CONTEXT MANAGERS
-# ============================================================================
 
 @asynccontextmanager
 async def email_processing_context(user_id: str):
-    """Context manager for email processing operations"""
+    """Enhanced email processing context with memory tracking"""
     
-    # Check if we can start processing
-    if not resource_manager.start_user_processing(user_id):
+    # Request processing slot
+    slot_ok, slot_msg = await resource_manager.request_processing_slot(user_id)
+    
+    if not slot_ok:
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Too many concurrent users processing. Limit: {CONCURRENT_USERS_LIMIT}"
+            status_code=503,
+            detail=f"Processing queue full: {slot_msg}"
         )
+    
+    # Set initial memory usage
+    resource_manager.update_user_memory(user_id, 0)
     
     try:
-        logger.info(f"Started email processing for user {user_id}")
-        yield resource_manager
-        
-    except asyncio.TimeoutError:
-        logger.error(f"Email processing timeout for user {user_id}")
-        raise HTTPException(
-            status_code=status.HTTP_408_REQUEST_TIMEOUT,
-            detail=f"Processing timeout after {EMAIL_PROCESSING_TIMEOUT} seconds"
-        )
-        
+        yield
     except Exception as e:
-        logger.error(f"Error in email processing for user {user_id}: {e}")
+        logger.error(f"Error in email processing context for {user_id}: {e}")
         raise
-        
     finally:
-        resource_manager.end_user_processing(user_id)
-        logger.info(f"Ended email processing for user {user_id}")
-
-# ============================================================================
-# HEALTH CHECK ENDPOINTS
-# ============================================================================
+        # Release processing slot
+        resource_manager.release_processing_slot(user_id)
 
 def get_health_status() -> Dict:
-    """Get system health status"""
-    stats = resource_manager.get_stats()
-    
-    # Determine health status
-    health_status = "healthy"
-    issues = []
-    
-    if stats.get("system_memory_percent", 0) > MEMORY_WARNING_THRESHOLD:
-        health_status = "warning"
-        issues.append(f"High memory usage: {stats['system_memory_percent']:.1f}%")
-    
-    if stats.get("system_cpu_percent", 0) > CPU_WARNING_THRESHOLD:
-        health_status = "warning"
-        issues.append(f"High CPU usage: {stats['system_cpu_percent']:.1f}%")
-    
-    if stats.get("active_users", 0) >= CONCURRENT_USERS_LIMIT * 0.9:
-        health_status = "warning"
-        issues.append(f"Near concurrent user limit: {stats['active_users']}/{CONCURRENT_USERS_LIMIT}")
-    
-    return {
-        "status": health_status,
-        "timestamp": time.time(),
-        "issues": issues,
-        "stats": stats,
-        "limits": {
-            "concurrent_users": CONCURRENT_USERS_LIMIT,
-            "gmail_api_rate_limit": GMAIL_API_RATE_LIMIT,
-            "max_memory_per_user_mb": MAX_MEMORY_USAGE,
-            "email_processing_timeout_seconds": EMAIL_PROCESSING_TIMEOUT
-        }
-    }
+    """Get enhanced system health status"""
+    return resource_manager.get_enhanced_stats()
 
-logger.info("🛡️ Scalability middleware loaded successfully!")
-logger.info(f"⚡ Rate limits: {MAX_REQUESTS_PER_MINUTE}/min general, {GMAIL_API_RATE_LIMIT}/100s Gmail API")
-logger.info(f"👥 Concurrent users limit: {CONCURRENT_USERS_LIMIT}")
-logger.info(f"🧠 Memory limit per user: {MAX_MEMORY_USAGE}MB") 
+# ============================================================================
+# PERFORMANCE MONITORING
+# ============================================================================
+
+async def performance_monitor():
+    """Background task for continuous performance monitoring"""
+    
+    while True:
+        try:
+            # Check system resources
+            await resource_manager.check_system_resources()
+            
+            # Cleanup expired entries periodically
+            if time.time() % 300 < 1:  # Every 5 minutes
+                await resource_manager.cleanup_memory()
+            
+            # Log system status every minute
+            if time.time() % 60 < 1:
+                stats = resource_manager.get_enhanced_stats()
+                logger.info(f"📊 System Status: {stats['active_users']}/{stats['concurrent_limit']} users, "
+                           f"Queue: {stats['queued_users']}, "
+                           f"CPU: {stats['cpu']['current_percent']:.1f}%, "
+                           f"Memory: {stats['memory']['current_percent']:.1f}%")
+            
+            await asyncio.sleep(1)  # Check every second
+            
+        except Exception as e:
+            logger.error(f"Performance monitor error: {e}")
+            await asyncio.sleep(5)  # Wait longer on error
+
+logger.info("🚀 Enhanced middleware loaded with intelligent resource management!") 

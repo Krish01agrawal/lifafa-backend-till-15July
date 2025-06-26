@@ -12,10 +12,13 @@ Key Features:
 - Email categorization with AI
 - Memory management with Mem0
 - Comprehensive error handling
+- Smart caching system for performance
+- Batch processing for scalability
 
-Recent Fixes (2025-06-19):
-- Fixed Mem0 client await issue (removed incorrect await on sync operations)
-- Added OpenAI quota exceeded error handling with fallbacks
+Recent Optimizations (2025-06-23):
+- Added intelligent caching system
+- Implemented batch processing for email categorization
+- Added smart memory management
 - Enhanced error handling for rate limits and API failures
 - Improved robustness for production use
 """
@@ -24,6 +27,10 @@ import os
 import json
 import asyncio
 import traceback
+import time
+import hashlib
+import sys
+import gc
 from datetime import datetime
 from typing import List, Dict, Optional, Any
 from pydantic import BaseModel
@@ -42,6 +49,20 @@ from agno.tools.python import PythonTools
 from dotenv import load_dotenv
 load_dotenv()
 
+# Import configuration
+from .config import (
+    ENABLE_SMART_CACHING, ENABLE_BATCH_PROCESSING,
+    CACHE_AI_RESPONSES, CACHE_SEARCH_RESULTS, CACHE_EMAIL_METADATA,
+    MAX_CACHE_SIZE_MB, EMAIL_CATEGORIZATION_BATCH_SIZE,
+    MAX_CONCURRENT_AI_REQUESTS, MEM0_DEFAULT_SEARCH_LIMIT,
+    MEM0_MAX_SEARCH_LIMIT, MEM0_RETRY_ATTEMPTS, MEM0_RETRY_DELAY
+)
+
+import logging
+
+# Configure logging
+logger = logging.getLogger(__name__)
+
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
@@ -56,18 +77,278 @@ if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY environment variable is required")
 
 # Initialize Mem0 clients
-print(f"🔑 Initializing Mem0 clients with API key: {MEM0_API_KEY[:8]}...{MEM0_API_KEY[-3:]}")
+logger.info(f"🔑 Initializing Mem0 clients with API key: {MEM0_API_KEY[:8]}...{MEM0_API_KEY[-3:]}")
 
 try:
     aclient = MemoryClient(api_key=MEM0_API_KEY)  # For add operations
     sync_client = MemoryClient(api_key=MEM0_API_KEY)  # For search operations
-    print("✅ Mem0 clients initialized successfully")
+    logger.info("✅ Mem0 clients initialized successfully")
 except Exception as e:
-    print(f"❌ Failed to initialize Mem0 clients: {e}")
+    logger.error(f"❌ Failed to initialize Mem0 clients: {e}")
     raise
 
 # Initialize OpenAI
 openai.api_key = OPENAI_API_KEY
+
+# ============================================================================
+# SMART CACHING SYSTEM
+# ============================================================================
+
+class SmartCache:
+    """Intelligent in-memory caching system for performance optimization"""
+    
+    def __init__(self, max_size_mb: int = MAX_CACHE_SIZE_MB):
+        self.cache = {}
+        self.access_times = {}
+        self.max_size_bytes = max_size_mb * 1024 * 1024
+        self.current_size = 0
+        self.hit_count = 0
+        self.miss_count = 0
+        logger.info(f"🧠 Smart cache initialized with {max_size_mb}MB capacity")
+    
+    def _get_cache_key(self, key_data: str) -> str:
+        """Generate cache key from input data"""
+        return hashlib.md5(key_data.encode()).hexdigest()
+    
+    def get(self, key_data: str) -> Optional[Any]:
+        """Get cached result"""
+        key = self._get_cache_key(key_data)
+        
+        if key in self.cache:
+            # Check if expired
+            cache_entry = self.cache[key]
+            if time.time() < cache_entry['expires']:
+                # Update access time and return data
+                self.access_times[key] = time.time()
+                self.hit_count += 1
+                return cache_entry['data']
+            else:
+                # Remove expired entry
+                self._remove_entry(key)
+        
+        self.miss_count += 1
+        return None
+    
+    def set(self, key_data: str, result: Any, ttl: int = 3600):
+        """Cache result with TTL"""
+        if not ENABLE_SMART_CACHING:
+            return
+            
+        key = self._get_cache_key(key_data)
+        
+        # Calculate result size
+        result_size = sys.getsizeof(result)
+        
+        # Check if we need to evict old entries
+        while self.current_size + result_size > self.max_size_bytes and self.cache:
+            self._evict_lru()
+        
+        # Store result
+        self.cache[key] = {
+            'data': result,
+            'expires': time.time() + ttl,
+            'size': result_size
+        }
+        self.access_times[key] = time.time()
+        self.current_size += result_size
+    
+    def _remove_entry(self, key: str):
+        """Remove entry from cache"""
+        if key in self.cache:
+            self.current_size -= self.cache[key]['size']
+            del self.cache[key]
+        if key in self.access_times:
+            del self.access_times[key]
+    
+    def _evict_lru(self):
+        """Evict least recently used item"""
+        if not self.access_times:
+            return
+            
+        # Find LRU key
+        lru_key = min(self.access_times, key=self.access_times.get)
+        self._remove_entry(lru_key)
+    
+    def cleanup_expired(self):
+        """Remove expired entries"""
+        current_time = time.time()
+        expired_keys = []
+        
+        for key, entry in self.cache.items():
+            if current_time > entry['expires']:
+                expired_keys.append(key)
+        
+        for key in expired_keys:
+            self._remove_entry(key)
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """Get cache statistics"""
+        total_requests = self.hit_count + self.miss_count
+        hit_rate = (self.hit_count / total_requests * 100) if total_requests > 0 else 0
+        
+        return {
+            "hit_count": self.hit_count,
+            "miss_count": self.miss_count,
+            "hit_rate_percent": round(hit_rate, 2),
+            "cache_size_mb": round(self.current_size / (1024 * 1024), 2),
+            "cache_entries": len(self.cache),
+            "max_size_mb": self.max_size_bytes / (1024 * 1024)
+        }
+
+# Global cache instance
+smart_cache = SmartCache()
+
+# ============================================================================
+# BATCH PROCESSING SYSTEM
+# ============================================================================
+
+class AsyncBatchProcessor:
+    """High-performance batch processing for emails and AI operations"""
+    
+    def __init__(self, max_concurrent: int = MAX_CONCURRENT_AI_REQUESTS):
+        self.max_concurrent = max_concurrent
+        self.semaphore = asyncio.Semaphore(max_concurrent)
+        logger.info(f"⚡ Batch processor initialized with {max_concurrent} concurrent operations")
+    
+    async def process_emails_batch(self, emails: List['EmailMessage'], 
+                                  processor_func, batch_size: int = EMAIL_CATEGORIZATION_BATCH_SIZE):
+        """Process emails in optimized batches"""
+        
+        if not ENABLE_BATCH_PROCESSING:
+            # Fallback to sequential processing
+            return await self._process_sequential(emails, processor_func)
+        
+        logger.info(f"🔄 Processing {len(emails)} emails in batches of {batch_size}")
+        
+        # Split emails into batches
+        batches = [emails[i:i + batch_size] for i in range(0, len(emails), batch_size)]
+        
+        # Process all batches concurrently
+        async def process_batch_with_semaphore(batch):
+            async with self.semaphore:
+                return await processor_func(batch)
+        
+        # Execute all batches in parallel
+        batch_tasks = [process_batch_with_semaphore(batch) for batch in batches]
+        results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+        
+        # Combine results
+        all_results = []
+        for result in results:
+            if isinstance(result, list):
+                all_results.extend(result)
+            elif not isinstance(result, Exception):
+                all_results.append(result)
+            else:
+                logger.error(f"Batch processing error: {result}")
+        
+        logger.info(f"✅ Batch processing complete: {len(all_results)} results")
+        return all_results
+    
+    async def _process_sequential(self, emails: List['EmailMessage'], processor_func):
+        """Fallback sequential processing"""
+        results = []
+        for email in emails:
+            try:
+                result = await processor_func(email)
+                results.append(result)
+            except Exception as e:
+                logger.error(f"Sequential processing error: {e}")
+        return results
+    
+    async def categorize_emails_fast(self, emails: List['EmailMessage']):
+        """Fast email categorization using intelligent batching"""
+        
+        async def categorize_batch(batch):
+            # Group similar emails for batch processing
+            financial_emails = [e for e in batch if self.is_likely_financial(e)]
+            other_emails = [e for e in batch if not self.is_likely_financial(e)]
+            
+            batch_results = []
+            
+            # Process financial emails together (they have similar patterns)
+            if financial_emails:
+                financial_results = await self.batch_categorize_financial(financial_emails)
+                batch_results.extend(financial_results)
+            
+            # Process other emails
+            if other_emails:
+                other_results = await self.batch_categorize_general(other_emails)
+                batch_results.extend(other_results)
+            
+            return batch_results
+        
+        return await self.process_emails_batch(emails, categorize_batch, batch_size=50)
+    
+    def is_likely_financial(self, email: 'EmailMessage') -> bool:
+        """Quick check if email is likely financial"""
+        content = f"{email.subject} {email.sender} {email.snippet}".lower()
+        financial_indicators = ['payment', 'charged', 'upi', 'bank', 'transaction', 
+                               'order', 'receipt', 'bill', '₹', 'rs.', 'inr']
+        return any(indicator in content for indicator in financial_indicators)
+    
+    async def batch_categorize_financial(self, emails: List['EmailMessage']):
+        """Batch categorize financial emails"""
+        results = []
+        for email in emails:
+            try:
+                # Use cached result if available
+                cache_key = f"financial_cat:{email.id}:{hash(email.subject)}"
+                cached_result = smart_cache.get(cache_key)
+                
+                if cached_result:
+                    results.append(cached_result)
+                else:
+                    result = await categorize_email_simple(email)
+                    smart_cache.set(cache_key, result, ttl=CACHE_AI_RESPONSES)
+                    results.append(result)
+                    
+            except Exception as e:
+                logger.error(f"Error categorizing financial email {email.id}: {e}")
+                # Fallback result
+                results.append({
+                    'id': email.id,
+                    'category': 'financial',
+                    'subcategory': 'misc',
+                    'merchant': 'unknown',
+                    'amount': None,
+                    'payment_method': 'unknown'
+                })
+        
+        return results
+    
+    async def batch_categorize_general(self, emails: List['EmailMessage']):
+        """Batch categorize general emails"""
+        results = []
+        for email in emails:
+            try:
+                # Use cached result if available
+                cache_key = f"general_cat:{email.id}:{hash(email.subject)}"
+                cached_result = smart_cache.get(cache_key)
+                
+                if cached_result:
+                    results.append(cached_result)
+                else:
+                    result = await categorize_email_simple(email)
+                    smart_cache.set(cache_key, result, ttl=CACHE_AI_RESPONSES)
+                    results.append(result)
+                    
+            except Exception as e:
+                logger.error(f"Error categorizing general email {email.id}: {e}")
+                # Fallback result
+                results.append({
+                    'id': email.id,
+                    'category': 'general',
+                    'subcategory': 'misc',
+                    'merchant': 'unknown',
+                    'amount': None,
+                    'payment_method': 'unknown'
+                })
+        
+        return results
+
+# Global batch processor
+batch_processor = AsyncBatchProcessor()
 
 # ============================================================================
 # DATA MODELS
@@ -1600,7 +1881,7 @@ async def process_gmail_data_for_user(user_id: str, gmail_emails: List[Dict]) ->
         
         # Update user status in database
         try:
-            from app.db import users_collection
+            from .db import users_collection
             await users_collection.update_one(
                 {"user_id": user_id},
                 {"$set": {
