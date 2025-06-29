@@ -55,6 +55,18 @@ from .middleware import (
     get_health_status, resource_manager, performance_monitor
 )
 
+# Import new financial services
+from .credit_report_service import credit_report_service
+from .statement_processor import statement_processor
+from .credit_card_service import credit_card_service
+from .browser_automation_service import browser_automation_service
+
+# Import new models for financial features
+from .models import (
+    CreditReportRequest, StatementUploadRequest, CreditCardCriteria,
+    BrowserAutomationRequest
+)
+
 # Configure basic logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -2685,3 +2697,552 @@ async def send_keepalive_to_user_connections(user_id: str):
         raise
     except Exception as e:
         logger.error(f"❌ [KEEPALIVE] Error in keepalive task for user {user_id}: {e}")
+
+# ============================================================================
+# CREDIT REPORT API ENDPOINTS - NEW FEATURE
+# ============================================================================
+
+@app.post("/credit-report/fetch")
+async def fetch_credit_report(request: CreditReportRequest):
+    """Fetch credit report from specified bureau"""
+    try:
+        # Decode JWT to get user_id
+        user_data = decode_jwt_token(request.jwt_token)
+        if not user_data:
+            raise HTTPException(status_code=401, detail="Invalid JWT token")
+        
+        user_id = user_data.get("user_id", user_data.get("sub", ""))
+        request.jwt_token = user_id  # Use user_id consistently
+        
+        result = await credit_report_service.fetch_credit_report(request)
+        
+        if result["success"]:
+            return {
+                "success": True,
+                "message": "Credit report fetched successfully",
+                "data": result["data"],
+                "source": result.get("source", "api")
+            }
+        else:
+            return {
+                "success": False,
+                "error": result["error"]
+            }
+            
+    except Exception as e:
+        logger.error(f"Error in fetch_credit_report: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/credit-report/insights/{report_id}")
+async def generate_credit_insights(report_id: str, credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Generate AI-powered insights from credit report"""
+    try:
+        # Decode JWT to get user_id
+        user_data = decode_jwt_token(credentials.credentials)
+        if not user_data:
+            raise HTTPException(status_code=401, detail="Invalid JWT token")
+        
+        user_id = user_data.get("user_id", user_data.get("sub", ""))
+        
+        insights = await credit_report_service.generate_credit_insights(user_id, report_id)
+        
+        return {
+            "success": True,
+            "insights": insights.dict()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error generating credit insights: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/credit-report/history")
+async def get_credit_report_history(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Get user's credit report history"""
+    try:
+        # Decode JWT to get user_id
+        user_data = decode_jwt_token(credentials.credentials)
+        if not user_data:
+            raise HTTPException(status_code=401, detail="Invalid JWT token")
+        
+        user_id = user_data.get("user_id", user_data.get("sub", ""))
+        
+        reports = await credit_report_service.get_user_credit_reports(user_id)
+        
+        return {
+            "success": True,
+            "reports": reports
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting credit report history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/credit-report/insights/{report_id}")
+async def get_credit_insights(report_id: str, credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Get credit insights for a specific report"""
+    try:
+        # Decode JWT to get user_id
+        user_data = decode_jwt_token(credentials.credentials)
+        if not user_data:
+            raise HTTPException(status_code=401, detail="Invalid JWT token")
+        
+        user_id = user_data.get("user_id", user_data.get("sub", ""))
+        
+        insights = await credit_report_service.get_credit_insights(user_id, report_id)
+        
+        if insights:
+            return {
+                "success": True,
+                "insights": insights
+            }
+        else:
+            return {
+                "success": False,
+                "error": "Insights not found"
+            }
+        
+    except Exception as e:
+        logger.error(f"Error getting credit insights: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================================
+# BANK STATEMENT PROCESSING API ENDPOINTS - NEW FEATURE
+# ============================================================================
+
+from fastapi import UploadFile, File, Form
+
+@app.post("/statement/upload")
+async def upload_bank_statement(
+    file: UploadFile = File(...),
+    jwt_token: str = Form(...),
+    bank_name: str = Form(""),
+    account_number: str = Form(""),
+    statement_period_from: str = Form(""),
+    statement_period_to: str = Form("")
+):
+    """Upload and process bank statement"""
+    try:
+        # Decode JWT to get user_id
+        user_data = decode_jwt_token(jwt_token)
+        if not user_data:
+            raise HTTPException(status_code=401, detail="Invalid JWT token")
+        
+        user_id = user_data.get("user_id", user_data.get("sub", ""))
+        
+        # Read file content
+        file_content = await file.read()
+        file_type = file.filename.split('.')[-1].lower() if file.filename else "pdf"
+        
+        # Create statement upload request
+        request = StatementUploadRequest(
+            jwt_token=user_id,
+            statement_type=file_type,
+            bank_name=bank_name,
+            account_number=account_number,
+            statement_period={
+                "from": statement_period_from,
+                "to": statement_period_to
+            }
+        )
+        
+        result = await statement_processor.process_statement(file_content, file_type, request)
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error uploading bank statement: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/statement/history")
+async def get_statement_history(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Get user's bank statement history"""
+    try:
+        # Decode JWT to get user_id
+        user_data = decode_jwt_token(credentials.credentials)
+        if not user_data:
+            raise HTTPException(status_code=401, detail="Invalid JWT token")
+        
+        user_id = user_data.get("user_id", user_data.get("sub", ""))
+        
+        statements = await statement_processor.get_user_statements(user_id)
+        
+        return {
+            "success": True,
+            "statements": statements
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting statement history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/statement/insights/{statement_id}")
+async def get_statement_insights(statement_id: str, credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Get insights for a specific bank statement"""
+    try:
+        # Decode JWT to get user_id
+        user_data = decode_jwt_token(credentials.credentials)
+        if not user_data:
+            raise HTTPException(status_code=401, detail="Invalid JWT token")
+        
+        user_id = user_data.get("user_id", user_data.get("sub", ""))
+        
+        insights = await statement_processor.get_statement_insights(user_id, statement_id)
+        
+        if insights:
+            return {
+                "success": True,
+                "insights": insights
+            }
+        else:
+            return {
+                "success": False,
+                "error": "Insights not found"
+            }
+        
+    except Exception as e:
+        logger.error(f"Error getting statement insights: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================================
+# CREDIT CARD RECOMMENDATION API ENDPOINTS - NEW FEATURE
+# ============================================================================
+
+@app.post("/credit-cards/recommendations")
+async def get_credit_card_recommendations(criteria: CreditCardCriteria):
+    """Get personalized credit card recommendations"""
+    try:
+        # Decode JWT to get user_id
+        user_data = decode_jwt_token(criteria.jwt_token)
+        if not user_data:
+            raise HTTPException(status_code=401, detail="Invalid JWT token")
+        
+        user_id = user_data.get("user_id", user_data.get("sub", ""))
+        criteria.jwt_token = user_id  # Use user_id consistently
+        
+        recommendations = await credit_card_service.get_personalized_recommendations(criteria)
+        
+        return {
+            "success": True,
+            "recommendations": recommendations.dict()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting credit card recommendations: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/credit-cards/recommendations/history")
+async def get_recommendation_history(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Get user's credit card recommendation history"""
+    try:
+        # Decode JWT to get user_id
+        user_data = decode_jwt_token(credentials.credentials)
+        if not user_data:
+            raise HTTPException(status_code=401, detail="Invalid JWT token")
+        
+        user_id = user_data.get("user_id", user_data.get("sub", ""))
+        
+        recommendations = await credit_card_service.get_user_recommendations(user_id)
+        
+        return {
+            "success": True,
+            "recommendations": recommendations
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting recommendation history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/credit-cards/apply")
+async def initiate_card_application(
+    card_id: str = Form(...),
+    jwt_token: str = Form(...),
+    pre_filled_data: str = Form("{}")
+):
+    """Initiate credit card application process"""
+    try:
+        # Decode JWT to get user_id
+        user_data = decode_jwt_token(jwt_token)
+        if not user_data:
+            raise HTTPException(status_code=401, detail="Invalid JWT token")
+        
+        user_id = user_data.get("user_id", user_data.get("sub", ""))
+        
+        # Parse pre-filled data
+        try:
+            pre_filled_dict = json.loads(pre_filled_data)
+        except json.JSONDecodeError:
+            pre_filled_dict = {}
+        
+        application = await credit_card_service.initiate_card_application(user_id, card_id, pre_filled_dict)
+        
+        return {
+            "success": True,
+            "application": application.dict()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error initiating card application: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/credit-cards/applications")
+async def get_application_history(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Get user's credit card application history"""
+    try:
+        # Decode JWT to get user_id
+        user_data = decode_jwt_token(credentials.credentials)
+        if not user_data:
+            raise HTTPException(status_code=401, detail="Invalid JWT token")
+        
+        user_id = user_data.get("user_id", user_data.get("sub", ""))
+        
+        applications = await credit_card_service.get_user_applications(user_id)
+        
+        return {
+            "success": True,
+            "applications": applications
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting application history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/credit-health/complete-report")
+async def get_complete_credit_health_report(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Generate comprehensive credit health report"""
+    try:
+        # Decode JWT to get user_id
+        user_data = decode_jwt_token(credentials.credentials)
+        if not user_data:
+            raise HTTPException(status_code=401, detail="Invalid JWT token")
+        
+        user_id = user_data.get("user_id", user_data.get("sub", ""))
+        
+        health_report = await credit_card_service.generate_complete_credit_health_report(user_id)
+        
+        return {
+            "success": True,
+            "credit_health_report": health_report.dict()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error generating credit health report: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================================
+# BROWSER AUTOMATION API ENDPOINTS - NEW FEATURE
+# ============================================================================
+
+@app.post("/automation/scrape-cards")
+async def scrape_credit_cards(request: BrowserAutomationRequest):
+    """Scrape credit cards from comparison websites"""
+    try:
+        # Decode JWT to get user_id
+        user_data = decode_jwt_token(request.jwt_token)
+        if not user_data:
+            raise HTTPException(status_code=401, detail="Invalid JWT token")
+        
+        user_id = user_data.get("user_id", user_data.get("sub", ""))
+        request.jwt_token = user_id  # Use user_id consistently
+        
+        async with browser_automation_service as automation:
+            result = await automation.execute_automation_request(request)
+        
+        return {
+            "success": True,
+            "result": result.dict()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error scraping credit cards: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/automation/fill-application")
+async def fill_application_form(request: BrowserAutomationRequest):
+    """Automatically fill credit card application form"""
+    try:
+        # Decode JWT to get user_id
+        user_data = decode_jwt_token(request.jwt_token)
+        if not user_data:
+            raise HTTPException(status_code=401, detail="Invalid JWT token")
+        
+        user_id = user_data.get("user_id", user_data.get("sub", ""))
+        request.jwt_token = user_id  # Use user_id consistently
+        
+        async with browser_automation_service as automation:
+            result = await automation.execute_automation_request(request)
+        
+        return {
+            "success": True,
+            "result": result.dict()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error filling application form: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/automation/scraped-cards/latest")
+async def get_latest_scraped_cards(limit: int = 50):
+    """Get latest scraped credit cards from all sources"""
+    try:
+        async with browser_automation_service as automation:
+            cards = await automation.get_latest_scraped_cards(limit)
+        
+        return {
+            "success": True,
+            "cards": cards,
+            "total": len(cards)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting latest scraped cards: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/automation/history")
+async def get_automation_history(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Get user's browser automation history"""
+    try:
+        # Decode JWT to get user_id
+        user_data = decode_jwt_token(credentials.credentials)
+        if not user_data:
+            raise HTTPException(status_code=401, detail="Invalid JWT token")
+        
+        user_id = user_data.get("user_id", user_data.get("sub", ""))
+        
+        async with browser_automation_service as automation:
+            history = await automation.get_scraping_history(user_id)
+        
+        return {
+            "success": True,
+            "history": history
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting automation history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================================
+# COMPREHENSIVE FINANCIAL DASHBOARD API - NEW FEATURE
+# ============================================================================
+
+@app.get("/financial/dashboard/complete")
+async def get_complete_financial_dashboard(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Get comprehensive financial dashboard with all features"""
+    try:
+        # Decode JWT to get user_id
+        user_data = decode_jwt_token(credentials.credentials)
+        if not user_data:
+            raise HTTPException(status_code=401, detail="Invalid JWT token")
+        
+        user_id = user_data.get("user_id", user_data.get("sub", ""))
+        
+        # Gather data from all services in parallel
+        credit_reports_task = credit_report_service.get_user_credit_reports(user_id)
+        statements_task = statement_processor.get_user_statements(user_id)
+        recommendations_task = credit_card_service.get_user_recommendations(user_id)
+        applications_task = credit_card_service.get_user_applications(user_id)
+        
+        # Wait for all tasks to complete
+        credit_reports, statements, recommendations, applications = await asyncio.gather(
+            credit_reports_task, statements_task, recommendations_task, applications_task,
+            return_exceptions=True
+        )
+        
+        # Handle exceptions gracefully
+        dashboard_data = {
+            "user_id": user_id,
+            "credit_reports": credit_reports if not isinstance(credit_reports, Exception) else [],
+            "bank_statements": statements if not isinstance(statements, Exception) else [],
+            "card_recommendations": recommendations if not isinstance(recommendations, Exception) else [],
+            "card_applications": applications if not isinstance(applications, Exception) else [],
+            "generated_at": datetime.now().isoformat()
+        }
+        
+        # Add summary statistics
+        dashboard_data["summary"] = {
+            "total_credit_reports": len(dashboard_data["credit_reports"]),
+            "total_statements": len(dashboard_data["bank_statements"]),
+            "total_recommendations": len(dashboard_data["card_recommendations"]),
+            "total_applications": len(dashboard_data["card_applications"]),
+            "latest_credit_score": dashboard_data["credit_reports"][0].get("credit_score_info", {}).get("score", 0) if dashboard_data["credit_reports"] else 0
+        }
+        
+        return {
+            "success": True,
+            "dashboard": dashboard_data
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting complete financial dashboard: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================================
+# FINANCIAL FEATURES HEALTH CHECK - NEW FEATURE
+# ============================================================================
+
+@app.get("/financial/health")
+async def financial_features_health_check():
+    """Health check for all financial features"""
+    try:
+        health_data = {
+            "timestamp": datetime.now().isoformat(),
+            "services": {}
+        }
+        
+        # Check credit report service
+        try:
+            # Simple check - count documents
+            credit_reports_count = await credit_report_service.credit_reports_collection.count_documents({})
+            health_data["services"]["credit_reports"] = {
+                "status": "healthy",
+                "total_reports": credit_reports_count
+            }
+        except Exception as e:
+            health_data["services"]["credit_reports"] = {
+                "status": "error",
+                "error": str(e)
+            }
+        
+        # Check statement processor
+        try:
+            statements_count = await statement_processor.statements_collection.count_documents({})
+            health_data["services"]["statement_processor"] = {
+                "status": "healthy",
+                "total_statements": statements_count
+            }
+        except Exception as e:
+            health_data["services"]["statement_processor"] = {
+                "status": "error",
+                "error": str(e)
+            }
+        
+        # Check credit card service
+        try:
+            cards_count = await credit_card_service.cards_collection.count_documents({})
+            health_data["services"]["credit_card_service"] = {
+                "status": "healthy",
+                "total_cards": cards_count
+            }
+        except Exception as e:
+            health_data["services"]["credit_card_service"] = {
+                "status": "error",
+                "error": str(e)
+            }
+        
+        # Overall health status
+        error_count = sum(1 for service in health_data["services"].values() if service["status"] == "error")
+        if error_count == 0:
+            health_data["overall_status"] = "healthy"
+        elif error_count < len(health_data["services"]) / 2:
+            health_data["overall_status"] = "degraded"
+        else:
+            health_data["overall_status"] = "unhealthy"
+        
+        return health_data
+        
+    except Exception as e:
+        logger.error(f"Error in financial features health check: {e}")
+        return {
+            "timestamp": datetime.now().isoformat(),
+            "overall_status": "error",
+            "error": str(e)
+        }

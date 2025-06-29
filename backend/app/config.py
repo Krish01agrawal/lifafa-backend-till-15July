@@ -182,6 +182,243 @@ MAX_CONCURRENT_DB_OPERATIONS = 30  # concurrent database operations
 # ENVIRONMENT-SPECIFIC OVERRIDES
 # ============================================================================
 
+# ============================================================================
+# CREDIT REPORT API CONFIGURATION - NEW FEATURE
+# ============================================================================
+
+# Credit Bureau API Settings
+ENABLE_CREDIT_BUREAU_APIS = True
+CREDIT_REPORT_TIMEOUT = 180  # 3 minutes for credit bureau API calls
+CREDIT_REPORT_CACHE_HOURS = 24  # Cache credit reports for 24 hours
+CREDIT_REPORT_RETRY_ATTEMPTS = 3
+
+# Supported Credit Bureaus (India)
+SUPPORTED_CREDIT_BUREAUS = {
+    "cibil": {
+        "name": "CIBIL (TransUnion)",
+        "api_endpoint": os.getenv("CIBIL_API_ENDPOINT", "https://api.cibil.com/v1"),
+        "api_key": os.getenv("CIBIL_API_KEY", ""),
+        "enabled": bool(os.getenv("CIBIL_ENABLED", "false").lower() == "true"),
+        "sandbox_mode": bool(os.getenv("CIBIL_SANDBOX", "true").lower() == "true")
+    },
+    "experian": {
+        "name": "Experian India",
+        "api_endpoint": os.getenv("EXPERIAN_API_ENDPOINT", "https://api.experian.in/v1"),
+        "api_key": os.getenv("EXPERIAN_API_KEY", ""),
+        "enabled": bool(os.getenv("EXPERIAN_ENABLED", "false").lower() == "true"),
+        "sandbox_mode": bool(os.getenv("EXPERIAN_SANDBOX", "true").lower() == "true")
+    },
+    "crif": {
+        "name": "CRIF High Mark",
+        "api_endpoint": os.getenv("CRIF_API_ENDPOINT", "https://api.crifhighmark.com/v1"),
+        "api_key": os.getenv("CRIF_API_KEY", ""),
+        "enabled": bool(os.getenv("CRIF_ENABLED", "false").lower() == "true"),
+        "sandbox_mode": bool(os.getenv("CRIF_SANDBOX", "true").lower() == "true")
+    },
+    "equifax": {
+        "name": "Equifax India",
+        "api_endpoint": os.getenv("EQUIFAX_API_ENDPOINT", "https://api.equifax.co.in/v1"),
+        "api_key": os.getenv("EQUIFAX_API_KEY", ""),
+        "enabled": bool(os.getenv("EQUIFAX_ENABLED", "false").lower() == "true"),
+        "sandbox_mode": bool(os.getenv("EQUIFAX_SANDBOX", "true").lower() == "true")
+    }
+}
+
+# Credit Report Processing Limits
+MAX_CREDIT_REPORTS_PER_USER_PER_MONTH = 3  # Limit to avoid excessive costs
+CREDIT_REPORT_DATA_RETENTION_MONTHS = 12  # Keep credit reports for 1 year
+ENABLE_CREDIT_SCORE_MONITORING = True  # Enable periodic score monitoring
+
+# ============================================================================
+# BANK STATEMENT PROCESSING CONFIGURATION - NEW FEATURE
+# ============================================================================
+
+# Statement Processing Settings
+ENABLE_STATEMENT_PROCESSING = True
+STATEMENT_PROCESSING_TIMEOUT = 300  # 5 minutes for large statement files
+MAX_STATEMENT_FILE_SIZE_MB = 50  # Maximum file size for upload
+SUPPORTED_STATEMENT_FORMATS = ["pdf", "csv", "xlsx", "xls"]
+
+# PDF Processing Configuration
+PDF_PROCESSING_ENGINE = "pdfplumber"  # or "camelot"
+PDF_PASSWORD_ATTEMPTS = 3  # Try common passwords for protected PDFs
+COMMON_PDF_PASSWORDS = ["", "123456", "password", "dob", "pan"]  # Common bank statement passwords
+
+# Statement Analysis Settings
+STATEMENT_ANALYSIS_LOOKBACK_MONTHS = 12  # Analyze last 12 months of data
+MIN_TRANSACTIONS_FOR_ANALYSIS = 10  # Minimum transactions needed for meaningful analysis
+ENABLE_CATEGORY_AUTO_CLASSIFICATION = True  # Auto-categorize transactions
+ENABLE_RECURRING_PAYMENT_DETECTION = True  # Detect EMIs, subscriptions
+
+# Transaction Categories for Auto-Classification
+TRANSACTION_CATEGORIES = {
+    "Income": ["salary", "bonus", "interest", "dividend", "refund"],
+    "Food & Dining": ["swiggy", "zomato", "restaurant", "food", "dominos", "kfc"],
+    "Shopping": ["amazon", "flipkart", "myntra", "ajio", "shopping", "mall"],
+    "Transportation": ["uber", "ola", "petrol", "fuel", "metro", "taxi"],
+    "Utilities": ["electricity", "water", "gas", "internet", "mobile", "broadband"],
+    "Healthcare": ["hospital", "medical", "pharmacy", "doctor", "health"],
+    "Entertainment": ["netflix", "prime", "spotify", "movie", "book", "game"],
+    "EMI": ["emi", "loan", "installment", "equated"],
+    "Investment": ["mutual fund", "sip", "investment", "trading", "stock"],
+    "Insurance": ["insurance", "premium", "lic", "policy"],
+    "Education": ["school", "college", "course", "education", "fees"],
+    "Travel": ["flight", "hotel", "booking", "travel", "vacation"]
+}
+
+# ============================================================================
+# BROWSER AUTOMATION CONFIGURATION - NEW FEATURE
+# ============================================================================
+
+# Browser Automation Settings
+ENABLE_BROWSER_AUTOMATION = True
+BROWSER_AUTOMATION_TIMEOUT = 600  # 10 minutes for complex automation tasks
+BROWSER_TYPE = "chromium"  # "chromium", "firefox", "webkit"
+BROWSER_HEADLESS_MODE = True  # Run browsers in headless mode for server deployment
+
+# Playwright Configuration
+PLAYWRIGHT_BROWSER_ARGS = [
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+    "--disable-web-security",
+    "--disable-blink-features=AutomationControlled"
+]
+
+# Credit Card Scraping Sources
+CREDIT_CARD_SOURCES = {
+    "bankbazaar": {
+        "url": "https://www.bankbazaar.com/credit-card.html",
+        "enabled": True,
+        "rate_limit": 60,  # seconds between requests
+        "max_pages": 5
+    },
+    "paisabazaar": {
+        "url": "https://www.paisabazaar.com/credit-card/",
+        "enabled": True,
+        "rate_limit": 60,
+        "max_pages": 5
+    },
+    "cardexpert": {
+        "url": "https://www.cardexpert.in/",
+        "enabled": True,
+        "rate_limit": 60,
+        "max_pages": 3
+    }
+}
+
+# Application Automation Settings
+ENABLE_AUTO_FORM_FILLING = True  # Enable automatic form filling
+MAX_APPLICATION_ATTEMPTS_PER_DAY = 3  # Limit applications per user per day
+FORM_FILLING_DELAY_SECONDS = 2  # Delay between form field fills
+ENABLE_CAPTCHA_SOLVING = False  # Disable CAPTCHA solving for now (requires external service)
+
+# Bank Application URLs (Indian Banks)
+BANK_APPLICATION_URLS = {
+    "hdfc": "https://www.hdfcbank.com/personal/pay/cards/credit-cards/apply-online",
+    "icici": "https://www.icicibank.com/credit-card/application-form",
+    "sbi": "https://www.sbi.co.in/web/personal-banking/cards/credit-cards/apply",
+    "axis": "https://www.axisbank.com/retail/cards/credit-card/apply-online",
+    "kotak": "https://www.kotak.com/en/personal-banking/cards/credit-cards/apply.html",
+    "indusind": "https://www.indusind.com/in/en/personal/cards/credit-cards/apply-online.html",
+    "yes": "https://www.yesbank.in/apply-online/credit-cards",
+    "au": "https://www.aubank.in/credit-card-apply-online"
+}
+
+# ============================================================================
+# AI & ANALYSIS CONFIGURATION - ENHANCED FOR NEW FEATURES
+# ============================================================================
+
+# OpenAI Configuration for Financial Analysis
+FINANCIAL_ANALYSIS_MODEL = "gpt-4"  # Use GPT-4 for better financial insights
+FINANCIAL_ANALYSIS_MAX_TOKENS = 2000  # Increased for detailed analysis
+ENABLE_STREAMING_RESPONSES = True  # Stream long analysis responses
+
+# Credit Report Analysis Prompts
+CREDIT_REPORT_ANALYSIS_PROMPTS = {
+    "score_analysis": """Analyze this credit score and provide insights on factors affecting it, 
+    comparison with score ranges, and specific recommendations for improvement.""",
+    
+    "debt_analysis": """Analyze the debt portfolio including credit utilization, 
+    payment history, and debt-to-income ratio. Provide actionable recommendations.""",
+    
+    "risk_assessment": """Assess the credit risk profile based on payment history, 
+    account diversity, and recent credit behavior. Rate the overall risk level."""
+}
+
+# Statement Analysis Prompts
+STATEMENT_ANALYSIS_PROMPTS = {
+    "spending_pattern": """Analyze spending patterns from bank transactions and identify 
+    categories, trends, and opportunities for savings.""",
+    
+    "income_stability": """Analyze income stability and regularity from credit transactions. 
+    Identify salary patterns and additional income sources.""",
+    
+    "financial_health": """Provide overall financial health assessment based on 
+    cash flow, savings rate, and spending behavior."""
+}
+
+# Credit Card Recommendation Prompts
+CARD_RECOMMENDATION_PROMPTS = {
+    "personalized_recommendation": """Based on spending patterns, income, and credit score, 
+    recommend the most suitable credit cards with detailed reasoning.""",
+    
+    "benefit_calculation": """Calculate personalized benefits for each recommended credit card 
+    based on user's spending categories and amounts."""
+}
+
+# ============================================================================
+# SECURITY & PRIVACY CONFIGURATION - ENHANCED FOR SENSITIVE DATA
+# ============================================================================
+
+# Data Encryption Settings (for sensitive financial data)
+ENABLE_DATA_ENCRYPTION = True
+ENCRYPTION_KEY_ROTATION_DAYS = 90  # Rotate encryption keys every 90 days
+SENSITIVE_DATA_FIELDS = [
+    "pan_number", "account_number", "card_number", "bank_details", 
+    "credit_score", "income", "address", "phone_number"
+]
+
+# Privacy Settings
+ENABLE_DATA_MASKING = True  # Mask sensitive data in logs and responses
+CREDIT_REPORT_ACCESS_LOG = True  # Log all credit report access
+STATEMENT_PROCESSING_LOG = True  # Log statement processing activities
+DATA_RETENTION_POLICY = {
+    "credit_reports": 365,  # days
+    "bank_statements": 1095,  # 3 years
+    "application_data": 180,  # 6 months for unsuccessful applications
+    "browser_automation_logs": 30  # days
+}
+
+# Compliance Settings
+ENABLE_CONSENT_MANAGEMENT = True  # Track user consents
+GDPR_COMPLIANCE_MODE = True  # Enable GDPR-compliant data handling
+DATA_EXPORT_FORMAT = "json"  # Format for data export requests
+
+# ============================================================================
+# MONITORING & ALERTING - NEW FEATURES
+# ============================================================================
+
+# Credit Monitoring Alerts
+ENABLE_CREDIT_SCORE_ALERTS = True
+CREDIT_SCORE_CHANGE_THRESHOLD = 10  # Alert if score changes by more than 10 points
+ENABLE_NEW_ACCOUNT_ALERTS = True  # Alert when new accounts appear
+ENABLE_FRAUD_DETECTION_ALERTS = True  # Alert for potential fraud indicators
+
+# Financial Health Monitoring
+ENABLE_SPENDING_ALERTS = True
+SPENDING_SPIKE_THRESHOLD = 1.5  # Alert if spending increases by 50%
+LOW_BALANCE_ALERT_THRESHOLD = 5000  # Alert if account balance falls below ₹5,000
+ENABLE_BUDGET_TRACKING = True  # Enable budget vs actual spending tracking
+
+# System Performance Monitoring for New Features
+PERFORMANCE_METRICS = {
+    "credit_report_fetch_time": 180,  # seconds
+    "statement_processing_time": 300,  # seconds
+    "browser_automation_time": 600,   # seconds
+    "ai_analysis_time": 120           # seconds
+}
+
 def get_config() -> Dict[str, Any]:
     """Get configuration with environment-specific overrides"""
     config = {

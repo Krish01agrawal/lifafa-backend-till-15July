@@ -1,0 +1,39 @@
+{
+  "total_tested": 4,
+  "successful": 0,
+  "failed": 4,
+  "results": {
+    "cibil": {
+      "configured": true,
+      "endpoint_accessible": false,
+      "endpoint_message": "Connection failed: Cannot connect to host api.cibil.com:443 ssl:default [nodename nor servname provided, or not known]",
+      "api_call_success": false,
+      "api_message": "API test error: 1 validation error for CreditReportRequest\naddress\n  Input should be a valid dictionary [type=dict_type, input_value='Test Address, Mumbai, Maharashtra, 400001', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.11/v/dict_type",
+      "sandbox_mode": true
+    },
+    "experian": {
+      "configured": true,
+      "endpoint_accessible": false,
+      "endpoint_message": "Connection failed: Cannot connect to host api.experian.in:443 ssl:default [nodename nor servname provided, or not known]",
+      "api_call_success": false,
+      "api_message": "API test error: 1 validation error for CreditReportRequest\naddress\n  Input should be a valid dictionary [type=dict_type, input_value='Test Address, Mumbai, Maharashtra, 400001', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.11/v/dict_type",
+      "sandbox_mode": true
+    },
+    "crif": {
+      "configured": true,
+      "endpoint_accessible": false,
+      "endpoint_message": "Connection failed: Cannot connect to host api.crifhighmark.com:443 ssl:default [nodename nor servname provided, or not known]",
+      "api_call_success": false,
+      "api_message": "API test error: 1 validation error for CreditReportRequest\naddress\n  Input should be a valid dictionary [type=dict_type, input_value='Test Address, Mumbai, Maharashtra, 400001', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.11/v/dict_type",
+      "sandbox_mode": true
+    },
+    "equifax": {
+      "configured": true,
+      "endpoint_accessible": false,
+      "endpoint_message": "Connection failed: Cannot connect to host api.equifax.co.in:443 ssl:True [SSLCertVerificationError: (1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: self-signed certificate in certificate chain (_ssl.c:1028)')]",
+      "api_call_success": false,
+      "api_message": "API test error: 1 validation error for CreditReportRequest\naddress\n  Input should be a valid dictionary [type=dict_type, input_value='Test Address, Mumbai, Maharashtra, 400001', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.11/v/dict_type",
+      "sandbox_mode": true
+    }
+  }
+}
