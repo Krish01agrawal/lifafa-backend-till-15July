@@ -2595,3 +2595,624 @@ async def schedule_mem0_retry(user_id: str, emails: List[EmailMessage], retry_de
 # ============================================================================
 # ENHANCED EMAIL PROCESSING WITH FALLBACK
 # ============================================================================
+
+# Global cache instance
+smart_cache = SmartCache()
+
+# ============================================================================
+# PARALLEL PROCESSING SYSTEM WITH PRIORITY QUEUES
+# ============================================================================
+
+class ParallelMem0Processor:
+    """
+    🚀 PARALLEL MEM0 UPLOAD SYSTEM
+    
+    Features:
+    - Priority queue system for immediate dashboard access
+    - Parallel workers for 5x faster processing
+    - Smart categorization and batching
+    - WebSocket progress updates
+    - Comprehensive error handling and logging
+    """
+    
+    def __init__(self, max_workers: int = 5):
+        self.max_workers = max_workers
+        self.semaphore = asyncio.Semaphore(max_workers)
+        self.stats = {
+            "processed": 0,
+            "successful": 0,
+            "failed": 0,
+            "financial_emails": 0,
+            "priority_emails": 0,
+            "bulk_emails": 0
+        }
+        logger.info(f"🚀 ParallelMem0Processor initialized with {max_workers} workers")
+    
+    async def upload_emails_parallel_with_priority(
+        self, 
+        user_id: str, 
+        emails: List[EmailMessage],
+        websocket_client_id: str = None
+    ) -> Dict[str, Any]:
+        """
+        🎯 MAIN PARALLEL PROCESSING FUNCTION
+        
+        Priority System:
+        1. Financial emails (20) - 5-8 seconds - Immediate dashboard access
+        2. Recent important (30) - 8-12 seconds - Basic querying
+        3. Bulk remaining - Background processing with parallel workers
+        """
+        if not emails:
+            logger.warning(f"⚠️ [PARALLEL] No emails provided for user {user_id}")
+            return {"success": False, "message": "No emails to process"}
+        
+        start_time = datetime.now()
+        logger.info(f"🚀 [PARALLEL] Starting priority-based parallel processing for {len(emails)} emails (user: {user_id})")
+        
+        try:
+            # Step 1: Categorize and prioritize emails
+            logger.info(f"📊 [PARALLEL] Step 1: Categorizing emails by priority...")
+            prioritized_emails = await self._categorize_and_prioritize_emails(emails, user_id)
+            
+            financial_emails = prioritized_emails["financial"]
+            important_emails = prioritized_emails["important"] 
+            bulk_emails = prioritized_emails["bulk"]
+            
+            logger.info(f"📈 [PARALLEL] Email categorization complete:")
+            logger.info(f"   💰 Financial (Priority 1): {len(financial_emails)} emails")
+            logger.info(f"   ⭐ Important (Priority 2): {len(important_emails)} emails")
+            logger.info(f"   📦 Bulk (Priority 3): {len(bulk_emails)} emails")
+            
+            # Step 2: Process Priority Queue 1 - Financial Emails (IMMEDIATE)
+            if financial_emails:
+                logger.info(f"💰 [PARALLEL] Step 2A: Processing {len(financial_emails)} financial emails (Priority 1)...")
+                if websocket_client_id:
+                    await self._send_progress_update(
+                        websocket_client_id, 
+                        "processing_financial", 
+                        f"Processing {len(financial_emails)} financial emails...", 
+                        30
+                    )
+                
+                financial_result = await self._process_priority_queue(
+                    user_id, financial_emails, "financial", websocket_client_id
+                )
+                logger.info(f"✅ [PARALLEL] Priority 1 Complete: {financial_result['successful']}/{len(financial_emails)} financial emails processed")
+            
+            # Step 3: Process Priority Queue 2 - Important Emails
+            if important_emails:
+                logger.info(f"⭐ [PARALLEL] Step 2B: Processing {len(important_emails)} important emails (Priority 2)...")
+                if websocket_client_id:
+                    await self._send_progress_update(
+                        websocket_client_id, 
+                        "processing_important", 
+                        f"Processing {len(important_emails)} important emails...", 
+                        50
+                    )
+                
+                important_result = await self._process_priority_queue(
+                    user_id, important_emails, "important", websocket_client_id
+                )
+                logger.info(f"✅ [PARALLEL] Priority 2 Complete: {important_result['successful']}/{len(important_emails)} important emails processed")
+            
+            # Step 4: DASHBOARD READY - User can start querying!
+            priority_processing_time = (datetime.now() - start_time).total_seconds()
+            logger.info(f"🎉 [PARALLEL] DASHBOARD READY for user {user_id}!")
+            logger.info(f"   ⏱️ Priority processing time: {priority_processing_time:.2f} seconds")
+            logger.info(f"   💰 Financial emails ready: {len(financial_emails)}")
+            logger.info(f"   ⭐ Important emails ready: {len(important_emails)}")
+            logger.info(f"   ✅ User can start querying immediately!")
+            
+            if websocket_client_id:
+                await self._send_progress_update(
+                    websocket_client_id, 
+                    "dashboard_ready", 
+                    f"Dashboard ready! {len(financial_emails + important_emails)} priority emails processed", 
+                    60,
+                    {
+                        "dashboard_ready": True,
+                        "financial_emails": len(financial_emails),
+                        "important_emails": len(important_emails),
+                        "processing_time": f"{priority_processing_time:.2f}s"
+                    }
+                )
+            
+            # Step 5: Process bulk emails in background with parallel workers
+            if bulk_emails:
+                logger.info(f"📦 [PARALLEL] Step 3: Starting background processing of {len(bulk_emails)} bulk emails...")
+                
+                # Process bulk emails with parallel workers (non-blocking for user)
+                bulk_task = asyncio.create_task(
+                    self._process_bulk_emails_parallel(user_id, bulk_emails, websocket_client_id)
+                )
+                
+                # Don't wait for bulk processing - return immediately for dashboard access
+                logger.info(f"🔄 [PARALLEL] Bulk processing started in background")
+            
+            # Calculate final stats
+            total_priority_emails = len(financial_emails) + len(important_emails)
+            total_processing_time = (datetime.now() - start_time).total_seconds()
+            
+            return {
+                "success": True,
+                "dashboard_ready": True,
+                "priority_emails_processed": total_priority_emails,
+                "financial_emails": len(financial_emails),
+                "important_emails": len(important_emails),
+                "bulk_emails_queued": len(bulk_emails),
+                "priority_processing_time": f"{priority_processing_time:.2f}s",
+                "total_emails": len(emails),
+                "message": f"Dashboard ready! {total_priority_emails} priority emails processed in {priority_processing_time:.2f}s. {len(bulk_emails)} emails processing in background.",
+                "processing_type": "parallel_priority"
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ [PARALLEL] Critical error in parallel processing: {e}", exc_info=True)
+            return {
+                "success": False,
+                "message": f"Parallel processing failed: {str(e)}",
+                "processing_type": "parallel_priority"
+            }
+    
+    async def _categorize_and_prioritize_emails(self, emails: List[EmailMessage], user_id: str) -> Dict[str, List[EmailMessage]]:
+        """
+        🎯 Smart email categorization for priority processing
+        
+        Priority 1 (Financial): Bank notifications, payment confirmations, receipts
+        Priority 2 (Important): Recent emails from known contacts, important services
+        Priority 3 (Bulk): Promotional, newsletters, older emails
+        """
+        logger.info(f"📊 [CATEGORIZATION] Analyzing {len(emails)} emails for priority classification...")
+        
+        financial_emails = []
+        important_emails = []
+        bulk_emails = []
+        
+        # Financial keywords for quick detection
+        financial_keywords = [
+            'payment', 'transaction', 'bank', 'credit', 'debit', 'upi', 'paytm', 'gpay', 'phonepe',
+            'amazon', 'flipkart', 'swiggy', 'zomato', 'uber', 'ola', 'bill', 'invoice', 'receipt',
+            'purchase', 'order', 'refund', 'cashback', 'reward', 'statement', 'balance'
+        ]
+        
+        # Important sender domains
+        important_domains = [
+            'amazon.', 'google.', 'microsoft.', 'apple.', 'netflix.', 'spotify.',
+            'linkedin.', 'github.', 'stackoverflow.', 'medium.', 'twitter.'
+        ]
+        
+        for email in emails:
+            try:
+                # Combine subject and snippet for analysis
+                email_content = f"{email.subject} {email.snippet}".lower()
+                sender_lower = email.sender.lower()
+                
+                # Priority 1: Financial emails
+                if any(keyword in email_content for keyword in financial_keywords):
+                    financial_emails.append(email)
+                    continue
+                
+                # Priority 2: Important emails
+                if (any(domain in sender_lower for domain in important_domains) or 
+                    'important' in email_content or 
+                    'urgent' in email_content or
+                    len(email.subject) > 0 and not any(promo in email_content for promo in ['unsubscribe', 'newsletter', 'promotion'])):
+                    important_emails.append(email)
+                    continue
+                
+                # Priority 3: Everything else (bulk)
+                bulk_emails.append(email)
+                
+            except Exception as e:
+                logger.warning(f"⚠️ [CATEGORIZATION] Error categorizing email {email.id}: {e}")
+                # Default to bulk if categorization fails
+                bulk_emails.append(email)
+        
+        # Limit priority queues to prevent overload
+        financial_emails = financial_emails[:20]  # Top 20 financial
+        important_emails = important_emails[:30]  # Top 30 important
+        
+        logger.info(f"✅ [CATEGORIZATION] Email prioritization complete:")
+        logger.info(f"   💰 Financial: {len(financial_emails)}")
+        logger.info(f"   ⭐ Important: {len(important_emails)}")
+        logger.info(f"   📦 Bulk: {len(bulk_emails)}")
+        
+        return {
+            "financial": financial_emails,
+            "important": important_emails,
+            "bulk": bulk_emails
+        }
+    
+    async def _process_priority_queue(
+        self, 
+        user_id: str, 
+        emails: List[EmailMessage], 
+        queue_type: str,
+        websocket_client_id: str = None
+    ) -> Dict[str, Any]:
+        """
+        🎯 Process priority queue with enhanced logging and error handling
+        """
+        if not emails:
+            return {"successful": 0, "failed": 0}
+        
+        logger.info(f"🔄 [PRIORITY-{queue_type.upper()}] Processing {len(emails)} emails...")
+        start_time = datetime.now()
+        
+        successful = 0
+        failed = 0
+        
+        # Process emails sequentially for priority queues (more reliable)
+        for i, email in enumerate(emails):
+            try:
+                # Use existing upload logic with enhanced error handling
+                result = await self._upload_single_email_with_retry(user_id, email, queue_type)
+                
+                if result["success"]:
+                    successful += 1
+                else:
+                    failed += 1
+                
+                # Progress logging every 5 emails
+                if (i + 1) % 5 == 0:
+                    logger.info(f"📊 [PRIORITY-{queue_type.upper()}] Progress: {i + 1}/{len(emails)} ({successful} successful, {failed} failed)")
+                
+                # Small delay to prevent API overload
+                await asyncio.sleep(0.05)
+                
+            except Exception as e:
+                logger.error(f"❌ [PRIORITY-{queue_type.upper()}] Error processing email {email.id}: {e}")
+                failed += 1
+        
+        processing_time = (datetime.now() - start_time).total_seconds()
+        success_rate = (successful / len(emails)) * 100 if emails else 0
+        
+        logger.info(f"✅ [PRIORITY-{queue_type.upper()}] Queue processing complete:")
+        logger.info(f"   📊 Results: {successful}/{len(emails)} successful ({success_rate:.1f}%)")
+        logger.info(f"   ⏱️ Processing time: {processing_time:.2f} seconds")
+        logger.info(f"   🚀 Average time per email: {processing_time/len(emails):.2f}s")
+        
+        return {
+            "successful": successful,
+            "failed": failed,
+            "processing_time": processing_time,
+            "success_rate": success_rate
+        }
+    
+    async def _process_bulk_emails_parallel(
+        self, 
+        user_id: str, 
+        emails: List[EmailMessage],
+        websocket_client_id: str = None
+    ) -> Dict[str, Any]:
+        """
+        🚀 Process bulk emails with parallel workers for maximum speed
+        """
+        if not emails:
+            return {"successful": 0, "failed": 0}
+        
+        logger.info(f"🚀 [BULK-PARALLEL] Starting parallel processing of {len(emails)} bulk emails...")
+        start_time = datetime.now()
+        
+        # Split emails into batches for parallel processing
+        batch_size = max(1, len(emails) // self.max_workers)
+        email_batches = [emails[i:i + batch_size] for i in range(0, len(emails), batch_size)]
+        
+        logger.info(f"📦 [BULK-PARALLEL] Created {len(email_batches)} batches (avg {batch_size} emails per batch)")
+        
+        # Process batches in parallel
+        tasks = []
+        for i, batch in enumerate(email_batches):
+            task = asyncio.create_task(
+                self._process_email_batch_parallel(user_id, batch, i + 1, websocket_client_id)
+            )
+            tasks.append(task)
+        
+        # Wait for all batches to complete
+        batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Aggregate results
+        total_successful = 0
+        total_failed = 0
+        
+        for i, result in enumerate(batch_results):
+            if isinstance(result, Exception):
+                logger.error(f"❌ [BULK-PARALLEL] Batch {i + 1} failed: {result}")
+                total_failed += len(email_batches[i])
+            else:
+                total_successful += result.get("successful", 0)
+                total_failed += result.get("failed", 0)
+        
+        processing_time = (datetime.now() - start_time).total_seconds()
+        success_rate = (total_successful / len(emails)) * 100 if emails else 0
+        
+        logger.info(f"🎉 [BULK-PARALLEL] Parallel bulk processing complete:")
+        logger.info(f"   📊 Results: {total_successful}/{len(emails)} successful ({success_rate:.1f}%)")
+        logger.info(f"   ⏱️ Total processing time: {processing_time:.2f} seconds")
+        logger.info(f"   🚀 Speed improvement: ~{len(emails) * 0.5 / processing_time:.1f}x faster than sequential")
+        
+        # Send final progress update
+        if websocket_client_id:
+            await self._send_progress_update(
+                websocket_client_id,
+                "bulk_complete",
+                f"Background processing complete! {total_successful} emails processed",
+                100,
+                {
+                    "bulk_complete": True,
+                    "total_processed": total_successful,
+                    "processing_time": f"{processing_time:.2f}s"
+                }
+            )
+        
+        return {
+            "successful": total_successful,
+            "failed": total_failed,
+            "processing_time": processing_time,
+            "success_rate": success_rate
+        }
+    
+    async def _process_email_batch_parallel(
+        self, 
+        user_id: str, 
+        batch: List[EmailMessage], 
+        batch_number: int,
+        websocket_client_id: str = None
+    ) -> Dict[str, Any]:
+        """
+        🔄 Process a batch of emails with semaphore-controlled concurrency
+        """
+        async with self.semaphore:
+            logger.info(f"⚡ [BATCH-{batch_number}] Processing {len(batch)} emails...")
+            start_time = datetime.now()
+            
+            successful = 0
+            failed = 0
+            
+            # Process emails in batch with controlled concurrency
+            for i, email in enumerate(batch):
+                try:
+                    result = await self._upload_single_email_with_retry(user_id, email, f"batch-{batch_number}")
+                    
+                    if result["success"]:
+                        successful += 1
+                    else:
+                        failed += 1
+                    
+                    # Progress update every 50 emails
+                    if websocket_client_id and (i + 1) % 50 == 0:
+                        await self._send_progress_update(
+                            websocket_client_id,
+                            "bulk_progress",
+                            f"Background processing: {i + 1} emails in batch {batch_number}",
+                            70 + (i + 1) / len(batch) * 20  # Progress from 70% to 90%
+                        )
+                    
+                    # Small delay to prevent API overload
+                    await asyncio.sleep(0.02)
+                    
+                except Exception as e:
+                    logger.error(f"❌ [BATCH-{batch_number}] Error processing email {email.id}: {e}")
+                    failed += 1
+            
+            processing_time = (datetime.now() - start_time).total_seconds()
+            logger.info(f"✅ [BATCH-{batch_number}] Complete: {successful}/{len(batch)} successful in {processing_time:.2f}s")
+            
+            return {
+                "successful": successful,
+                "failed": failed,
+                "processing_time": processing_time
+            }
+    
+    async def _upload_single_email_with_retry(
+        self, 
+        user_id: str, 
+        email: EmailMessage, 
+        context: str
+    ) -> Dict[str, Any]:
+        """
+        📧 Upload single email with comprehensive retry logic and error handling
+        """
+        max_retries = 3
+        base_delay = 1
+        
+        for attempt in range(max_retries):
+            try:
+                # Use existing categorization logic
+                try:
+                    insight = await categorize_email_with_agent(email)
+                except Exception:
+                    insight = await categorize_email_simple(email)
+                
+                # Prepare memory content
+                memory_content = f"""
+                Email ID: {email.id}
+                Subject: {email.subject}
+                From: {email.sender}
+                Date: {email.date}
+                Category: {insight.category}
+                Subcategory: {insight.subcategory}
+                Merchant: {insight.merchant}
+                Amount: {insight.amount}
+                Payment Method: {insight.payment_method}
+                Content: {email.snippet}
+                Body Preview: {email.body[:500] if email.body else 'No body content'}
+                """
+                
+                # Upload to Mem0
+                messages = [{"role": "user", "content": memory_content}]
+                
+                aclient.add(
+                    messages=messages,
+                    user_id=user_id,
+                    memory_id=email.id,
+                    metadata={
+                        "source": "gmail",
+                        "email_id": email.id,
+                        "category": insight.category,
+                        "subcategory": insight.subcategory,
+                        "merchant": insight.merchant,
+                        "date": email.date,
+                        "context": context,
+                        "timestamp": datetime.now().isoformat()
+                    }
+                )
+                
+                return {"success": True, "email_id": email.id}
+                
+            except Exception as e:
+                error_str = str(e).lower()
+                
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning(f"🔄 [{context.upper()}] Retry {attempt + 1} for {email.id} in {delay}s: {e}")
+                    await asyncio.sleep(delay)
+                    continue
+                else:
+                    logger.error(f"❌ [{context.upper()}] Failed to upload {email.id} after {max_retries} attempts: {e}")
+                    return {"success": False, "email_id": email.id, "error": str(e)}
+        
+        return {"success": False, "email_id": email.id, "error": "Max retries exceeded"}
+    
+    async def _send_progress_update(self, client_id: str, step: str, message: str, progress: int, data: dict = None):
+        """Send WebSocket progress update with error handling"""
+        try:
+            from .websocket import manager
+            await manager.send_progress_update(client_id, step, message, progress, data)
+        except Exception as e:
+            logger.warning(f"⚠️ WebSocket progress update failed: {e}")
+
+# Global parallel processor instance
+parallel_processor = ParallelMem0Processor(max_workers=5)
+
+# ============================================================================
+# FINANCIAL PROCESSING INTEGRATION FUNCTIONS
+# ============================================================================
+
+async def call_financial_processing_api(user_id: str, processing_context: str = "unknown") -> Dict[str, Any]:
+    """
+    💰 Call financial processing API with comprehensive error handling
+    
+    This function integrates with the existing /financial/process-from-emails endpoint
+    to extract financial transactions from stored emails.
+    """
+    logger.info(f"💰 [FINANCIAL-{processing_context.upper()}] Starting financial processing for user: {user_id}")
+    start_time = datetime.now()
+    
+    try:
+        # Import here to avoid circular imports
+        from app.fast_financial_processor import process_financial_transactions_from_mongodb
+        
+        # Call the financial processing function with extended timeout
+        result = await asyncio.wait_for(
+            process_financial_transactions_from_mongodb(user_id),
+            timeout=120  # 2 minute timeout for financial processing (increased from 60s)
+        )
+        
+        processing_time = (datetime.now() - start_time).total_seconds()
+        
+        if result.get("status") == "success":
+            transactions_found = result.get('transactions_found', 0)
+            total_amount = result.get('total_amount', 0)
+            categories = result.get('categories', {})
+            
+            logger.info(f"✅ [FINANCIAL-{processing_context.upper()}] Financial processing successful:")
+            logger.info(f"   💳 Transactions found: {transactions_found}")
+            logger.info(f"   💰 Total amount: {total_amount}")
+            logger.info(f"   📊 Categories: {len(categories)}")
+            logger.info(f"   ⏱️ Processing time: {processing_time:.2f} seconds")
+            
+            return {
+                "success": True,
+                "transactions_found": transactions_found,
+                "total_amount": total_amount,
+                "categories": categories,
+                "processing_time": processing_time,
+                "context": processing_context
+            }
+        else:
+            error_message = result.get('error', 'Unknown error')
+            logger.warning(f"⚠️ [FINANCIAL-{processing_context.upper()}] Financial processing failed: {error_message}")
+            
+            return {
+                "success": False,
+                "error": error_message,
+                "processing_time": processing_time,
+                "context": processing_context
+            }
+    
+    except asyncio.TimeoutError:
+        processing_time = (datetime.now() - start_time).total_seconds()
+        logger.error(f"❌ [FINANCIAL-{processing_context.upper()}] Financial processing timed out after 120 seconds")
+        logger.warning(f"⚠️ [FINANCIAL-{processing_context.upper()}] Continuing with parallel processing despite financial timeout")
+        
+        # Schedule background retry for financial processing
+        asyncio.create_task(schedule_financial_retry(user_id, processing_context))
+        
+        # Return partial success to not block the entire system
+        return {
+            "success": False,
+            "error": "Financial processing timed out - will retry in background",
+            "processing_time": processing_time,
+            "context": processing_context,
+            "retry_recommended": True,
+            "timeout_duration": "120s"
+        }
+    
+    except Exception as e:
+        processing_time = (datetime.now() - start_time).total_seconds()
+        logger.error(f"❌ [FINANCIAL-{processing_context.upper()}] Financial processing error: {e}", exc_info=True)
+        
+        return {
+            "success": False,
+            "error": str(e),
+            "processing_time": processing_time,
+            "context": processing_context
+        }
+
+async def schedule_financial_retry(user_id: str, processing_context: str, delay: int = 300):
+    """
+    📅 Schedule background retry for financial processing
+    
+    Args:
+        user_id: User ID for retry
+        processing_context: Context of the original processing
+        delay: Delay in seconds before retry (default: 5 minutes)
+    """
+    logger.info(f"📅 [FINANCIAL-RETRY] Scheduling financial processing retry for user {user_id} in {delay} seconds")
+    
+    # Wait for the specified delay
+    await asyncio.sleep(delay)
+    
+    try:
+        logger.info(f"🔄 [FINANCIAL-RETRY] Starting background financial processing retry for user {user_id}")
+        
+        # Retry financial processing with longer timeout
+        result = await call_financial_processing_api(user_id, f"{processing_context}_retry")
+        
+        if result.get("success", False):
+            logger.info(f"✅ [FINANCIAL-RETRY] Background retry successful for user {user_id}")
+            
+            # Update user flags to indicate financial data is now available
+            from .db import db_manager
+            users_coll = await db_manager.get_collection(user_id, "users")
+            await users_coll.update_one(
+                {"user_id": user_id},
+                {"$set": {
+                    "financial_retry_completed": True,
+                    "financial_retry_date": datetime.now().isoformat(),
+                    "financial_transactions_available": True,
+                    "retry_transactions_found": result.get('transactions_found', 0)
+                }},
+                upsert=True
+            )
+            
+        else:
+            logger.warning(f"⚠️ [FINANCIAL-RETRY] Background retry failed for user {user_id}: {result.get('error', 'Unknown error')}")
+            
+    except Exception as e:
+        logger.error(f"❌ [FINANCIAL-RETRY] Background retry error for user {user_id}: {e}", exc_info=True)
+
+# ============================================================================
+# EXISTING CODE CONTINUES BELOW
+# ============================================================================

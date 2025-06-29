@@ -1,0 +1,49 @@
+{
+  "diagnostic_results": {
+    "database_connection": {
+      "users_count": 1,
+      "users_query_time": "0.53s",
+      "emails_count": 19,
+      "emails_query_time": "0.02s",
+      "status": "healthy"
+    },
+    "email_data_volume": {
+      "top_users": [
+        {
+          "_id": "117454877979500520700",
+          "email_count": 19
+        }
+      ],
+      "aggregation_time": "0.02s",
+      "avg_email_body_size": "6858 chars",
+      "sample_emails_analyzed": 10,
+      "status": "normal"
+    },
+    "financial_components": {
+      "test_result": {
+        "status": "success",
+        "message": "No financial transactions found in stored emails",
+        "transactions_found": 0,
+        "user_id": "test_diagnostic_user"
+      },
+      "component_time": "0.02s",
+      "status": "functional"
+    },
+    "system_resources": {
+      "cpu_percent": 6.2,
+      "memory_percent": 75.8,
+      "memory_available_gb": "3.88",
+      "disk_percent": 2.8,
+      "process_count": 477,
+      "status": "healthy"
+    }
+  },
+  "recommendations": [
+    "\u23f1\ufe0f Increase financial processing timeout from 120s to 180s for large datasets",
+    "\ud83d\udd04 Implement progressive financial processing (recent first, then historical)",
+    "\ud83d\udce6 Add batch processing for large email volumes",
+    "\ud83e\udde0 Consider caching frequently accessed financial data",
+    "\ud83d\udcca Monitor database query performance with indexing"
+  ],
+  "timestamp": "2025-06-27T14:13:01.357644"
+}

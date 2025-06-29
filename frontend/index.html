@@ -335,6 +335,7 @@
     currentChatId = null;
 
     const wsUrl = `ws://${BACKEND_URL.replace(/^http:\/\//i, '')}/ws/chat`;
+    console.log(`[WebSocket] Connecting to: ${wsUrl}`);
     ws = new WebSocket(wsUrl);
     
     // Add connection timeout handling
@@ -349,11 +350,14 @@
     ws.onopen = () => {
       clearTimeout(connectionTimeout); // Clear timeout on successful connection
       console.log("[WebSocket] Connection opened, sending auth...");
+      console.log("[WebSocket] JWT token available:", !!jwtToken);
+      console.log("[WebSocket] JWT token length:", jwtToken ? jwtToken.length : 0);
+      
       // Send only JWT token - let backend generate chatId
-      ws.send(JSON.stringify({ 
-        jwt_token: jwtToken
-        // No chatId - backend will generate unique one
-      }));
+      const authMessage = { jwt_token: jwtToken };
+      console.log("[WebSocket] Sending auth message:", Object.keys(authMessage));
+      
+      ws.send(JSON.stringify(authMessage));
       // DON'T enable send button yet - wait for welcome message
     };
 
@@ -398,6 +402,25 @@
         if (data && data.error && data.reply && Array.isArray(data.reply) && data.reply.length > 0) {
           botResponseText = `Error: ${data.reply[0]}`;
           console.log("[WebSocket] Error response:", botResponseText);
+          
+          // Handle authentication errors specifically
+          if (data.reply[0].includes("Authentication failed")) {
+            console.error("[WebSocket] Authentication failed - redirecting to login");
+            showStatus("Authentication failed. Please login again.", 'error');
+            logout(); // Force logout and redirect to login
+            return;
+          }
+        } else if (data && data.error) {
+          botResponseText = `Error: ${data.error}`;
+          console.log("[WebSocket] Error (direct):", botResponseText);
+          
+          // Handle authentication errors specifically
+          if (data.error.includes("Authentication failed")) {
+            console.error("[WebSocket] Authentication failed - redirecting to login");
+            showStatus("Authentication failed. Please login again.", 'error');
+            logout(); // Force logout and redirect to login
+            return;
+          }
         } else if (data && data.reply && Array.isArray(data.reply) && data.reply.length > 0) {
           botResponseText = data.reply[0];
           console.log("[WebSocket] Bot response text:", botResponseText.substring(0, 100) + "...");

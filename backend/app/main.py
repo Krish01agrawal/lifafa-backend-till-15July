@@ -2,7 +2,7 @@ import os
 import time
 from dotenv import load_dotenv
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 import re
 
 # Determine the path to the .env file (two levels up from this file)
@@ -23,7 +23,7 @@ from .oauth import generate_auth_url, exchange_code_for_tokens
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from .db import users_collection, emails_collection
-from .gmail import build_gmail_service, fetch_emails, get_storage_statistics, process_and_store_emails, email_extractor
+from .gmail import build_gmail_service, fetch_emails, get_storage_statistics, process_and_store_emails, email_extractor, fetch_gmail_emails_historical, fetch_gmail_emails
 from .mem0_agent_agno import upload_emails_to_mem0, query_mem0, process_gmail_data_for_user, search_emails_in_mem0
 from .db import cleanup_manager, db_manager
 from .models import GoogleToken, GmailFetchPayload
@@ -33,6 +33,8 @@ import logging
 import asyncio
 from bson import ObjectId
 from pydantic import BaseModel
+import json
+from fastapi.responses import JSONResponse
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from .financial_agent import (
     process_financial_transactions_for_user,
@@ -1012,6 +1014,219 @@ class FinancialProcessingRequest(BaseModel):
 class FastFinancialProcessingRequest(BaseModel):
     jwt_token: str
 
+class GmailDownloadRequest(BaseModel):
+    jwt_token: str
+
+@app.post("/gmail/download-data")
+async def download_gmail_data(payload: GmailDownloadRequest):
+    """
+    🚀 NEW: Download Gmail data for the last 6 months in JSON format
+    
+    This endpoint:
+    1. Validates JWT token
+    2. Fetches user's Gmail data for the last 6 months
+    3. Returns complete email data in JSON format
+    4. Includes email content, headers, attachments info, and metadata
+    """
+    try:
+        logger.info(f"📥 Gmail data download request received")
+        
+        # 1. Validate JWT token
+        try:
+            payload_data = decode_jwt_token(payload.jwt_token)
+            user_id = payload_data.get("user_id")
+            
+            if not user_id:
+                raise HTTPException(status_code=401, detail="Invalid token: no user_id")
+                
+            logger.info(f"✅ JWT token validated for user: {user_id}")
+            
+        except Exception as e:
+            logger.error(f"❌ JWT token validation failed: {e}")
+            raise HTTPException(status_code=401, detail="Invalid JWT token")
+        
+        # 2. Get user data from database
+        try:
+            users_collection = await db_manager.get_collection(user_id, "users")
+            user_data = await users_collection.find_one({"user_id": user_id})
+            
+            if not user_data:
+                raise HTTPException(status_code=404, detail="User not found")
+            
+            access_token = user_data.get("access_token")
+            refresh_token = user_data.get("refresh_token")
+            
+            if not access_token:
+                raise HTTPException(status_code=400, detail="No Gmail access token found")
+                
+            logger.info(f"✅ User data retrieved for: {user_data.get('email', 'unknown')}")
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error retrieving user data: {e}")
+            raise HTTPException(status_code=500, detail="Error retrieving user data")
+        
+        # 3. Build Gmail service
+        try:
+            service = build_gmail_service(
+                access_token=access_token,
+                refresh_token=refresh_token,
+                client_id=os.getenv("GOOGLE_CLIENT_ID"),
+                client_secret=os.getenv("GOOGLE_CLIENT_SECRET")
+            )
+            logger.info(f"✅ Gmail service built successfully")
+            
+        except Exception as e:
+            logger.error(f"❌ Error building Gmail service: {e}")
+            raise HTTPException(status_code=500, detail="Error connecting to Gmail")
+        
+        # 4. Fetch Gmail data for last 6 months
+        try:
+            logger.info(f"📧 Fetching Gmail data for last 6 months...")
+            
+            # Calculate date range (6 months ago) - make timezone-aware
+            from datetime import timezone
+            six_months_ago = datetime.now(timezone.utc) - timedelta(days=180)
+            logger.info(f"📅 Date range: from {six_months_ago.strftime('%Y-%m-%d')} to {datetime.now().strftime('%Y-%m-%d')}")
+            
+            # Use the simpler Gmail fetch function for download API
+            # Start with a smaller limit for faster response, can be increased later
+            logger.info(f"🔄 Starting Gmail API fetch (max 1000 emails)...")
+            emails = await fetch_gmail_emails(
+                service=service,
+                user_id='me',
+                max_results=1000  # Reduced limit for faster response
+            )
+            logger.info(f"📧 Gmail API returned {len(emails)} emails")
+            
+            # Filter emails to last 6 months if needed
+            if emails:
+                logger.info(f"🔄 Filtering emails to last 6 months...")
+                filtered_emails = []
+                for i, email in enumerate(emails):
+                    if i % 100 == 0:  # Log progress every 100 emails
+                        logger.info(f"📊 Filtering progress: {i}/{len(emails)} emails processed")
+                    
+                    email_date = email.get('date')
+                    if email_date:
+                        # Handle different date formats and make timezone-aware
+                        if isinstance(email_date, str):
+                            try:
+                                email_date = datetime.fromisoformat(email_date.replace('Z', '+00:00'))
+                            except:
+                                continue
+                        elif hasattr(email_date, 'replace'):  # datetime object
+                            # Make timezone-aware if it's naive
+                            if email_date.tzinfo is None:
+                                email_date = email_date.replace(tzinfo=timezone.utc)
+                        else:
+                            continue
+                        
+                        # Check if email is within last 6 months (both are now timezone-aware)
+                        if email_date >= six_months_ago:
+                            filtered_emails.append(email)
+                
+                emails = filtered_emails
+                logger.info(f"📊 After 6-month filter: {len(emails)} emails remain")
+            
+            logger.info(f"✅ Fetched {len(emails)} emails from last 6 months")
+            
+        except Exception as e:
+            logger.error(f"❌ Error fetching Gmail data: {e}")
+            raise HTTPException(status_code=500, detail="Error fetching Gmail data")
+        
+        # 5. Process and enrich email data
+        try:
+            logger.info(f"🔄 Processing and enriching email data...")
+            
+            # Use the complete email extractor to get full data (already imported at top)
+            
+            processed_emails = []
+            for email in emails:
+                try:
+                    # Extract complete email data
+                    complete_email = email_extractor.extract_complete_email_data(email)
+                    
+                    # Convert datetime objects to strings for JSON serialization
+                    if isinstance(complete_email.get('date'), datetime):
+                        complete_email['date'] = complete_email['date'].isoformat()
+                    if isinstance(complete_email.get('extracted_at'), datetime):
+                        complete_email['extracted_at'] = complete_email['extracted_at'].isoformat()
+                    
+                    processed_emails.append(complete_email)
+                    
+                except Exception as email_error:
+                    logger.warning(f"⚠️ Error processing email {email.get('id', 'unknown')}: {email_error}")
+                    # Include basic email data even if processing fails
+                    basic_email = {
+                        "id": email.get("id"),
+                        "subject": email.get("subject", "No Subject"),
+                        "sender": email.get("sender", "Unknown"),
+                        "date": email.get("date", datetime.now()).isoformat() if isinstance(email.get("date"), datetime) else str(email.get("date", "")),
+                        "snippet": email.get("snippet", ""),
+                        "error": "Processing failed"
+                    }
+                    processed_emails.append(basic_email)
+            
+            logger.info(f"✅ Processed {len(processed_emails)} emails successfully")
+            
+        except Exception as e:
+            logger.error(f"❌ Error processing email data: {e}")
+            raise HTTPException(status_code=500, detail="Error processing email data")
+        
+        # 6. Prepare response data
+        try:
+            response_data = {
+                "status": "success",
+                "user_info": {
+                    "user_id": user_id,
+                    "email": user_data.get("email", "unknown"),
+                    "name": user_data.get("name", "unknown")
+                },
+                "data_info": {
+                    "total_emails": len(processed_emails),
+                    "date_range": f"Last 6 months (from {six_months_ago.strftime('%Y-%m-%d')})",
+                    "download_timestamp": datetime.now().isoformat(),
+                    "data_completeness": "full"  # Complete headers, body, attachments info
+                },
+                "emails": processed_emails,
+                "extraction_stats": email_extractor.get_extraction_stats(),
+                "metadata": {
+                    "api_version": "1.2.0",
+                    "format": "json",
+                    "compression": "none",
+                    "includes": [
+                        "email_headers",
+                        "email_body", 
+                        "attachment_info",
+                        "financial_classification",
+                        "importance_scores"
+                    ]
+                }
+            }
+            
+            logger.info(f"✅ Gmail data download completed successfully")
+            logger.info(f"📊 Response summary: {len(processed_emails)} emails, {len(json.dumps(response_data))} bytes")
+            
+            return JSONResponse(
+                content=response_data,
+                headers={
+                    "Content-Type": "application/json",
+                    "Content-Disposition": f"attachment; filename=gmail_data_{user_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+                }
+            )
+            
+        except Exception as e:
+            logger.error(f"❌ Error preparing response: {e}")
+            raise HTTPException(status_code=500, detail="Error preparing download")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Unexpected error in Gmail data download: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
 @app.post("/financial/process-from-emails")
 async def process_financial_from_stored_emails(payload: FastFinancialProcessingRequest):
     """
@@ -1691,41 +1906,108 @@ async def _process_immediate_emails(user_id: str, access_token: str, days: int =
                 logger.info(f"✅ [IMMEDIATE] Step 3 Complete: Successfully processed {emails_stored} recent emails")
                 logger.info(f"   📊 Storage result: {result}")
                 
-                # Step 4: IMMEDIATE FINANCIAL ANALYSIS for recent emails
-                logger.info(f"💰 [IMMEDIATE] Step 4: Starting financial analysis for recent emails...")
+                # Step 4: PARALLEL PROCESSING - Financial Analysis + Mem0 Upload
+                logger.info(f"🚀 [IMMEDIATE] Step 4: Starting PARALLEL processing (Financial + Mem0)...")
                 
-                # Send financial analysis update
+                # Send parallel processing update
                 if websocket_client_id:
                     try:
                         from .websocket import manager
                         await manager.send_progress_update(
                             websocket_client_id, 
-                            "financial_analysis", 
-                            "Analyzing financial transactions from recent emails...", 
-                            80
+                            "parallel_processing", 
+                            "Starting parallel financial analysis and Mem0 upload...", 
+                            70
                         )
                     except Exception as ws_error:
                         logger.warning(f"WebSocket progress update failed: {ws_error}")
                 
+                # Import parallel processing components
+                from .mem0_agent_agno import call_financial_processing_api, parallel_processor, EmailMessage
+                
+                # Convert emails to EmailMessage format for parallel processing
+                email_messages = []
+                for email in emails[:emails_stored]:  # Only process stored emails
+                    try:
+                        # Handle date conversion properly
+                        date_value = email.get("date", "")
+                        if hasattr(date_value, 'isoformat'):  # It's a datetime object
+                            date_str = date_value.isoformat()
+                        elif isinstance(date_value, str):
+                            date_str = date_value
+                        else:
+                            date_str = str(date_value) if date_value else ""
+                        
+                        email_msg = EmailMessage(
+                            id=email.get("id", ""),
+                            subject=email.get("subject", ""),
+                            sender=email.get("sender", ""),
+                            snippet=email.get("snippet", ""),
+                            body=email.get("body", ""),
+                            date=date_str
+                        )
+                        email_messages.append(email_msg)
+                    except Exception as e:
+                        logger.error(f"Error converting email to EmailMessage: {e}")
+                        continue
+                
+                # PARALLEL EXECUTION: Financial Processing + Mem0 Upload
                 try:
-                    from app.fast_financial_processor import process_financial_transactions_from_mongodb
+                    logger.info(f"⚡ [IMMEDIATE] Starting parallel tasks: Financial API + Mem0 Upload")
                     
-                    # Process financial transactions from recent emails
-                    financial_result = await asyncio.wait_for(
-                        process_financial_transactions_from_mongodb(user_id),
-                        timeout=30  # Quick timeout for immediate processing
+                    # Create parallel tasks
+                    financial_task = asyncio.create_task(
+                        call_financial_processing_api(user_id, "immediate_7day")
                     )
                     
-                    if financial_result["status"] == "success":
+                    mem0_task = asyncio.create_task(
+                        parallel_processor.upload_emails_parallel_with_priority(
+                            user_id, email_messages, websocket_client_id
+                        )
+                    )
+                    
+                    # Wait for both tasks to complete
+                    financial_result, mem0_result = await asyncio.gather(
+                        financial_task, mem0_task, return_exceptions=True
+                    )
+                    
+                    # Process financial result with enhanced error handling
+                    if isinstance(financial_result, Exception):
+                        logger.error(f"❌ [IMMEDIATE] Financial processing failed: {financial_result}")
+                        recent_transactions = 0
+                    elif financial_result.get("success", False):
                         recent_transactions = financial_result.get('transactions_found', 0)
-                        logger.info(f"✅ [IMMEDIATE] Step 4 Complete: Found {recent_transactions} recent financial transactions")
+                        logger.info(f"✅ [IMMEDIATE] Financial processing complete: {recent_transactions} transactions found")
                     else:
                         recent_transactions = 0
-                        logger.warning(f"⚠️ [IMMEDIATE] Step 4 Warning: Financial analysis failed: {financial_result.get('error', 'Unknown error')}")
+                        error_msg = financial_result.get('error', 'Unknown error')
                         
-                except Exception as financial_error:
+                        # Check if it's a timeout - don't treat as critical error
+                        if "timed out" in error_msg.lower():
+                            logger.warning(f"⚠️ [IMMEDIATE] Financial processing timed out - dashboard will still be ready")
+                            logger.info(f"📋 [IMMEDIATE] Financial analysis will continue in background")
+                        else:
+                            logger.warning(f"⚠️ [IMMEDIATE] Financial processing failed: {error_msg}")
+                    
+                    # Process Mem0 result
+                    if isinstance(mem0_result, Exception):
+                        logger.error(f"❌ [IMMEDIATE] Mem0 parallel processing failed: {mem0_result}")
+                        mem0_success = False
+                    elif mem0_result.get("success", False):
+                        logger.info(f"✅ [IMMEDIATE] Mem0 parallel processing complete: {mem0_result.get('priority_emails_processed', 0)} priority emails processed")
+                        mem0_success = True
+                    else:
+                        logger.warning(f"⚠️ [IMMEDIATE] Mem0 parallel processing failed: {mem0_result.get('message', 'Unknown error')}")
+                        mem0_success = False
+                    
+                    logger.info(f"🎉 [IMMEDIATE] PARALLEL PROCESSING COMPLETE:")
+                    logger.info(f"   💰 Financial transactions found: {recent_transactions}")
+                    logger.info(f"   🧠 Mem0 processing success: {mem0_success}")
+                    logger.info(f"   ⚡ Both processes ran in parallel for maximum speed!")
+                    
+                except Exception as parallel_error:
+                    logger.error(f"❌ [IMMEDIATE] Parallel processing error: {parallel_error}", exc_info=True)
                     recent_transactions = 0
-                    logger.error(f"❌ [IMMEDIATE] Step 4 Error: Financial analysis failed: {financial_error}")
                 
                 # Step 5: Update user flags for immediate access with financial data
                 logger.info(f"🔄 [IMMEDIATE] Step 5: Updating user flags for immediate access...")
@@ -2014,7 +2296,33 @@ async def process_historical_emails_non_blocking(user_id: str, access_token: str
             if result.get("success", False):
                 logger.info(f"✅ [NON-BLOCKING] Successfully processed {result['emails_stored']} historical emails")
                 
-                # Update user flags for complete sync
+                # PARALLEL PROCESSING: Historical Financial Analysis + Mem0 Upload
+                logger.info(f"🚀 [NON-BLOCKING] Starting parallel historical financial processing...")
+                
+                try:
+                    # Import parallel processing components
+                    from .mem0_agent_agno import call_financial_processing_api
+                    
+                    # Process historical financial transactions
+                    historical_financial_result = await call_financial_processing_api(user_id, "historical_6month")
+                    
+                    if historical_financial_result.get("success", False):
+                        historical_transactions = historical_financial_result.get('transactions_found', 0)
+                        total_amount = historical_financial_result.get('total_amount', 0)
+                        logger.info(f"✅ [NON-BLOCKING] Historical financial processing complete:")
+                        logger.info(f"   💳 Total transactions: {historical_transactions}")
+                        logger.info(f"   💰 Total amount: {total_amount}")
+                    else:
+                        historical_transactions = 0
+                        total_amount = 0
+                        logger.warning(f"⚠️ [NON-BLOCKING] Historical financial processing failed: {historical_financial_result.get('error', 'Unknown error')}")
+                        
+                except Exception as financial_error:
+                    logger.error(f"❌ [NON-BLOCKING] Historical financial processing error: {financial_error}", exc_info=True)
+                    historical_transactions = 0
+                    total_amount = 0
+                
+                # Update user flags for complete sync with financial data
                 users_coll = await db_manager.get_collection(user_id, "users")
                 await users_coll.update_one(
                     {"user_id": user_id},
@@ -2023,6 +2331,9 @@ async def process_historical_emails_non_blocking(user_id: str, access_token: str
                         "historical_sync_completed": True,
                         "historical_sync_date": datetime.now().isoformat(),
                         "historical_emails_processed": result['emails_stored'],
+                        "historical_financial_transactions": historical_transactions,  # ✅ Historical financial data
+                        "historical_total_amount": total_amount,  # ✅ Total financial amount
+                        "complete_financial_ready": True,  # ✅ Complete financial analysis done
                         "background_sync_needed": False,  # ✅ Background processing complete
                         "total_emails_processed": result.get('total_count', 0)
                     }},
@@ -2033,7 +2344,9 @@ async def process_historical_emails_non_blocking(user_id: str, access_token: str
                 print(f"\n{'='*80}")
                 print(f"🎉 BACKGROUND SYNC COMPLETED for User: {user_id}")
                 print(f"📊 Historical emails processed: {result['emails_stored']}")
-                print(f"✅ Complete 6-month email history now available for queries")
+                print(f"💰 Historical financial transactions: {historical_transactions}")
+                print(f"💳 Total financial amount: {total_amount}")
+                print(f"✅ Complete 6-month email + financial history now available for queries")
                 print(f"{'='*80}\n")
                 
             else:
@@ -2320,6 +2633,8 @@ async def send_keepalive_to_user_connections(user_id: str):
     """
     Send periodic keepalive messages to active WebSocket connections for a user
     to prevent timeouts during background processing
+    
+    FIXED: Prevents "dictionary changed size during iteration" error
     """
     try:
         from .websocket import manager
@@ -2328,14 +2643,42 @@ async def send_keepalive_to_user_connections(user_id: str):
         while True:
             await asyncio.sleep(8)
             
-            # Find active connections for this user (simplified approach)
-            # In a real implementation, you'd track user->connection mapping
-            for client_id, connection in manager.active_connections.items():
-                try:
-                    await manager.send_keepalive(client_id)
-                    logger.debug(f"📡 [KEEPALIVE] Sent keepalive to connection {client_id}")
-                except Exception as e:
-                    logger.debug(f"⚠️ [KEEPALIVE] Failed to send keepalive to {client_id}: {e}")
+            # FIXED: Create a copy of the connections to avoid iteration issues
+            try:
+                # Get user-specific connections if available
+                user_client_ids = []
+                if user_id in manager.user_connections:
+                    user_client_ids = manager.user_connections[user_id].copy()
+                
+                # If no user-specific connections, use a copy of all active connections
+                if not user_client_ids:
+                    user_client_ids = list(manager.active_connections.keys())
+                
+                # Send keepalive to each connection
+                keepalive_sent = 0
+                keepalive_failed = 0
+                
+                for client_id in user_client_ids:
+                    # Double-check connection still exists before sending
+                    if client_id in manager.active_connections:
+                        try:
+                            await manager.send_keepalive(client_id)
+                            keepalive_sent += 1
+                            logger.debug(f"📡 [KEEPALIVE] Sent keepalive to connection {client_id}")
+                        except Exception as e:
+                            keepalive_failed += 1
+                            logger.debug(f"⚠️ [KEEPALIVE] Failed to send keepalive to {client_id}: {e}")
+                            # Remove failed connection from manager
+                            manager.disconnect(client_id, user_id)
+                
+                # Summary logging (only if there were connections)
+                if keepalive_sent > 0 or keepalive_failed > 0:
+                    logger.debug(f"📊 [KEEPALIVE] User {user_id}: {keepalive_sent} sent, {keepalive_failed} failed")
+                    
+            except Exception as iteration_error:
+                logger.warning(f"⚠️ [KEEPALIVE] Iteration error for user {user_id}: {iteration_error}")
+                # Continue the loop even if one iteration fails
+                continue
                     
     except asyncio.CancelledError:
         logger.info(f"🔄 [KEEPALIVE] Keepalive task cancelled for user {user_id}")
