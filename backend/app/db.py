@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import gzip
 import json
 import re  # Import re module for regex operations
+from urllib.parse import quote_plus, urlparse, urlunparse
 from .config import (
     DB_MAX_POOL_SIZE, DB_MIN_POOL_SIZE, DB_CONNECTION_TIMEOUT,
     DATABASE_INSERT_BATCH_SIZE, ENABLE_DATABASE_SHARDING, 
@@ -36,14 +37,54 @@ class DatabaseManager:
         self.ca = certifi.where()
         self._initialize_databases()
     
+    def _encode_mongodb_uri(self, uri: str) -> str:
+        """Properly encode MongoDB URI with username and password"""
+        try:
+            # Parse the URI
+            parsed = urlparse(uri)
+            
+            # If there's no userinfo, return as-is
+            if not parsed.username:
+                return uri
+            
+            # Encode username and password
+            encoded_username = quote_plus(parsed.username) if parsed.username else None
+            encoded_password = quote_plus(parsed.password) if parsed.password else None
+            
+            # Reconstruct the URI with encoded credentials
+            if encoded_username and encoded_password:
+                netloc = f"{encoded_username}:{encoded_password}@{parsed.hostname}"
+                if parsed.port:
+                    netloc += f":{parsed.port}"
+                
+                encoded_uri = urlunparse((
+                    parsed.scheme,
+                    netloc,
+                    parsed.path,
+                    parsed.params,
+                    parsed.query,
+                    parsed.fragment
+                ))
+                
+                logger.info(f"🔐 MongoDB URI encoded successfully")
+                return encoded_uri
+            else:
+                return uri
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to encode MongoDB URI: {e}")
+            return uri
+    
     def _initialize_databases(self):
         """Initialize all shard databases with fallback support"""
         for i, uri in enumerate(SHARD_DATABASES):
             try:
-                logger.info(f"🔄 Attempting to connect to database shard {i}: {uri[:50]}...")
+                # Encode the URI to handle special characters in username/password
+                encoded_uri = self._encode_mongodb_uri(uri)
+                logger.info(f"🔄 Attempting to connect to database shard {i}: {encoded_uri[:50]}...")
                 
                 client = AsyncIOMotorClient(
-                    uri, 
+                    encoded_uri, 
                     tlsCAFile=self.ca,
                     maxPoolSize=DB_MAX_POOL_SIZE,
                     minPoolSize=DB_MIN_POOL_SIZE,

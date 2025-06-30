@@ -50,8 +50,8 @@ from .config import (
     ENABLE_DATABASE_SHARDING, STORAGE_WARNING_THRESHOLD, 
     STORAGE_CRITICAL_THRESHOLD, ENABLE_AUTO_CLEANUP, ENABLE_SMART_EMAIL_FILTERING
 )
-from .middleware import (
-    enhanced_rate_limit_middleware, email_processing_context, 
+from .core.middleware import (
+    RateLimitMiddleware, email_processing_context, 
     get_health_status, resource_manager, performance_monitor
 )
 
@@ -81,7 +81,7 @@ app = FastAPI(
 security = HTTPBearer()
 
 # Add enhanced scalability middleware FIRST (before CORS)
-app.middleware("http")(enhanced_rate_limit_middleware)
+app.add_middleware(RateLimitMiddleware)
 
 # Allow CORS from frontend origin (adjust as needed)
 app.add_middleware(
@@ -904,8 +904,8 @@ async def startup_event():
     # Schedule the financial analysis job to run every 90 seconds (offset to avoid conflicts)
     scheduler.add_job(check_and_process_financial_analysis, "interval", seconds=90, id="financial_analysis_job", max_instances=1)
     
-    # Start continuous performance monitoring
-    asyncio.create_task(performance_monitor())
+    # Performance monitoring is handled by middleware
+    # asyncio.create_task(performance_monitor())
     
     scheduler.start()
     logger.info("🚀 APScheduler started with PROGRESSIVE LOADING optimizations.")
