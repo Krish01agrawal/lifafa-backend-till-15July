@@ -1,26 +1,173 @@
 # Python
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
 
-./backend/app/__pycache__/
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
 
 # Virtualenv
 venv/
 */venv/
 .venv/
+env/
+ENV/
+env.bak/
+venv.bak/
 
 # Environment variables
 .env
 *.env
+.env.local
+.env.development
+.env.production
+.env.staging
+
+# Data Files & Responses (Financial/Email Data)
+*_response_*.json
+*_transactions_*.json
+financial_transactions_response_*.json
+response_*.json
+email_data_*.json
+user_data_*.json
+*.financial.json
+
+# Backup Files
+*_backup.*
+*.backup
+*.bak
+*.orig
+mem0_agent_backup.py
+
+# Processing & Utility Scripts (May contain sensitive data)
+process_financial_*.py
+process_*_from_mongodb.py
+financial_mem0_agent.py
+query_analyzer_agent.py
+
+# Production & Deployment Files
+deploy_*.sh
+production_*.conf
+*_production.*
+docker-compose.override.yml
+docker-compose.prod.yml
+.docker/
+
+# Database Files
+*.db
+*.sqlite
+*.sqlite3
+mongo_data/
+mongodb_data/
+database/
+data/
+*.sql
+*.dump
+
+# Logs
+*.log
+logs/
+log/
+*.out
+
+# AI/ML Models & Cache
+*.pkl
+*.pickle
+models/
+checkpoints/
+.mem0/
+mem0_cache/
+openai_cache/
 
 # IDE / Editor specific
 .vscode/
 .idea/
 *.swp
+*.swo
 *~
+.sublime-project
+.sublime-workspace
+*.code-workspace
 
 # OS-specific
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
+Desktop.ini
+
+# Node.js (for frontend)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# SSL Certificates
+*.pem
+*.key
+*.crt
+*.cert
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# Archive files
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# Media files (if not needed)
+*.mov
+*.mp4
+*.avi
+*.mkv
+
+# Large files
+*.bin
+*.dat

@@ -4,13 +4,10 @@
 
 The scalability features require one additional Python package:
 
-### **Install psutil for System Monitoring:**
+### **Install Backend Dependencies:**
 
 ```bash
-# In your virtual environment
-pip install psutil==6.1.0
-
-# Or install all dependencies
+# Install all backend dependencies (complete package)
 pip install -r requirements.txt
 ```
 
@@ -18,8 +15,8 @@ pip install -r requirements.txt
 
 1. **Install Dependencies:**
    ```bash
-   cd backend
-   pip install psutil==6.1.0
+   # Install backend dependencies (self-contained package)
+   pip install -r requirements.txt
    ```
 
 2. **Test Configuration:**

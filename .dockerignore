@@ -1,0 +1,128 @@
+# ============================================================================
+# .dockerignore - Docker Build Optimization
+# ============================================================================
+# Exclude unnecessary files from Docker build context for faster builds
+
+# Version control
+.git/
+.gitignore
+*.git*
+
+# Documentation (not needed in container)
+*.md
+!README.md
+docs/
+ADVANCED_FINANCIAL_FEATURES_DOCUMENTATION.md
+CREDIT_BUREAU_API_SETUP.md
+FINANCIAL_API_ENDPOINTS.md
+RESTRUCTURING_PROGRESS.md
+INSTALLATION_GUIDE.md
+SUBSCRIPTION_DETECTION_DOCUMENTATION.md
+
+# Development files
+.vscode/
+.cursor/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python cache and virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+venv/
+env/
+ENV/
+
+# Testing
+.pytest_cache/
+.coverage
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+
+# Large response files (not needed in container)
+response_*.json
+financial_transactions_response_*.json
+*.json.backup
+
+# Backup files
+*_backup.py
+mem0_agent_backup.py
+
+# Log files
+*.log
+logs/
+*.out
+
+# Environment files (will be provided via --env-file)
+.env.local
+.env.development
+.env.test
+.env.production
+.env.*.local
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+
+# Node.js (if any)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Editor files
+*.sublime-project
+*.sublime-workspace
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Deployment scripts (not needed in container)
+deploy_*.sh
+
+# Large media files
+*.mp4
+*.avi
+*.mov
+*.pdf.backup
+
+# Cache directories
+.cache/
+.npm/
+.yarn/ 
