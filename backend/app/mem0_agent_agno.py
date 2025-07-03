@@ -47,7 +47,9 @@ from agno.tools.python import PythonTools
 
 # Load environment variables
 from dotenv import load_dotenv
-load_dotenv()
+import os
+# Load .env from parent directory (project root)
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '..', '.env'))
 
 # Import configuration
 from .config import (

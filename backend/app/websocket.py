@@ -625,17 +625,20 @@ async def fetch_historical_emails_with_progress(service, user_id: str, client_id
         from .gmail import fetch_gmail_emails_historical
         from datetime import datetime, timedelta
         
-        # Calculate date range
-        end_date = datetime.now() - timedelta(days=7)
-        start_date = end_date - timedelta(days=6 * 30)
+        # Calculate date range for HISTORICAL emails (excludes recent days)
+        # This is INTENTIONAL - historical sync should NOT overlap with immediate sync
+        end_date = datetime.now() - timedelta(days=7)  # Exclude recent 7 days
+        start_date = end_date - timedelta(days=6 * 30)  # Go back 6 months
         
+        # NOTE: Using 'before' here is CORRECT for historical emails
+        # This ensures no overlap with immediate emails that include today
         query = f"after:{start_date.strftime('%Y/%m/%d')} before:{end_date.strftime('%Y/%m/%d')}"
         
         # Progress updates during fetch
         await manager.send_progress_update(
             client_id, 
             "fetching_phase1", 
-            f"Scanning emails from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}...", 
+            f"Scanning historical emails from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')} (excluding recent 7 days)...", 
             15
         )
         

@@ -1,4 +1,5 @@
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import UpdateOne, InsertOne, DeleteOne  # Add these imports
 from typing import Optional, Dict, List, Any
 import os
 import certifi # Import certifi
@@ -208,41 +209,29 @@ chats_collection = db["chats"]
 # DATA COMPRESSION UTILITIES
 # ============================================================================
 
-class UltraCompressor:
-    """Ultra-aggressive compression for free tier optimization"""
+# Import the intelligent compressor
+from .intelligent_compressor import intelligent_compressor
+
+class SmartCompressor:
+    """Smart compression wrapper that uses intelligent compression"""
     
     @staticmethod
     def compress_email_content(content: str) -> str:
-        """Compress email content to achieve 90% size reduction"""
+        """Compress email content using intelligent compression"""
         if not content or len(content) < 50:
             return content
         
-        try:
-            # Remove HTML tags and excessive whitespace
-            content = re.sub(r'<[^>]+>', '', content)  # Remove HTML
-            content = re.sub(r'\s+', ' ', content)     # Normalize whitespace
-            content = content.strip()
-            
-            # Truncate to essential content only
-            if len(content) > 500:
-                content = content[:500] + "..."
-            
-            # Compress with gzip
-            if ENABLE_AGGRESSIVE_COMPRESSION:
-                compressed = gzip.compress(content.encode('utf-8'))
-                # Only use compression if it actually saves space
-                if len(compressed) < len(content.encode('utf-8')) * 0.7:
-                    return compressed.hex()  # Store as hex string
-            
-            return content
-            
-        except Exception as e:
-            logger.error(f"Compression error: {e}")
-            return content[:100] + "..." if len(content) > 100 else content
+        # Create email-like data structure for intelligent compression
+        email_data = {'body': content, 'snippet': content[:200]}
+        
+        # Use intelligent compression
+        compressed = intelligent_compressor.compress_email_intelligently(email_data)
+        
+        return compressed.get('body', content)
     
     @staticmethod
     def decompress_email_content(content: str) -> str:
-        """Decompress email content"""
+        """Decompress email content (for backward compatibility)"""
         try:
             # Check if it's hex-encoded compressed data
             if len(content) > 20 and all(c in '0123456789abcdef' for c in content.lower()):
@@ -260,31 +249,39 @@ class UltraCompressor:
     
     @staticmethod
     def minimize_email_data(email_data: Dict) -> Dict:
-        """Keep only essential email fields"""
-        minimized = {}
-        
-        for field in ESSENTIAL_EMAIL_FIELDS:
-            if field in email_data:
-                minimized[field] = email_data[field]
-        
-        # Remove email body if configured
-        if REMOVE_EMAIL_BODY and 'body' in minimized:
-            del minimized['body']
-        
-        # Compress snippet if available
-        if 'snippet' in minimized:
-            minimized['snippet'] = UltraCompressor.compress_email_content(
-                minimized['snippet']
-            )
-        
-        # Add compression metadata
-        minimized['compressed'] = True
-        minimized['compression_version'] = 1
-        
-        return minimized
+        """Intelligently minimize email data while preserving important information"""
+        try:
+            # Use intelligent compression
+            compressed = intelligent_compressor.compress_email_intelligently(email_data)
+            
+            # Ensure essential fields are preserved
+            minimized = {}
+            for field in ESSENTIAL_EMAIL_FIELDS:
+                if field in compressed:
+                    minimized[field] = compressed[field]
+            
+            # Add compression metadata
+            minimized['compressed'] = True
+            minimized['compression_version'] = 2  # Updated version
+            minimized['compression_type'] = compressed.get('compression_type', 'intelligent')
+            
+            # Add structured data if available
+            if 'structured_data' in compressed:
+                minimized['structured_data'] = compressed['structured_data']
+            
+            return minimized
+            
+        except Exception as e:
+            logger.error(f"Intelligent compression error: {e}")
+            # Fallback to basic compression
+            return {
+                field: email_data.get(field)
+                for field in ESSENTIAL_EMAIL_FIELDS
+                if field in email_data
+            }
 
-# Global compressor instance
-compressor = UltraCompressor()
+# Global compressor instance (updated to use smart compression)
+compressor = SmartCompressor()
 
 # ============================================================================
 # AUTO-CLEANUP SYSTEM
@@ -530,8 +527,15 @@ class CompleteEmailProcessor:
         complete_data['financial_metadata'] = self.extract_financial_metadata(email_data)
         
         # Add processing metadata
-        complete_data['processed_at'] = datetime.now()
+        complete_data['processed_at'] = datetime.now().isoformat()  # Convert to string immediately
         complete_data['data_complete'] = True
+        
+        # 🔧 CRITICAL FIX: Ensure ALL datetime objects are converted to strings
+        for key, value in complete_data.items():
+            if isinstance(value, datetime):
+                complete_data[key] = value.isoformat()
+            elif hasattr(value, 'isoformat') and callable(getattr(value, 'isoformat')):
+                complete_data[key] = value.isoformat()
         
         return complete_data
     
@@ -606,7 +610,7 @@ email_processor = CompleteEmailProcessor()
 # ============================================================================
 
 async def insert_filtered_emails(user_id: str, emails_data: List[Dict], processing_type: str = "standard") -> Dict[str, Any]:
-    """Insert emails with smart filtering and complete data preservation"""
+    """Insert emails with smart filtering and complete data preservation - FIXED: No data loss"""
     
     if not emails_data:
         logger.warning(f"⚠️ No emails provided for user {user_id}")
@@ -650,59 +654,210 @@ async def insert_filtered_emails(user_id: str, emails_data: List[Dict], processi
             logger.error(f"❌ Failed to get email collection for user {user_id}: {db_error}")
             return {"success": False, "inserted": 0, "filtered": 0, "financial": 0, "error": f"Database connection failed: {str(db_error)}"}
         
-        # Remove existing emails for user (maintain 6-month limit)
+        # 🔧 CRITICAL FIX: Use upsert operations instead of deleting all emails
+        # Check existing emails to avoid duplicates
+        existing_email_ids = set()
         try:
-            delete_result = await emails_coll.delete_many({"user_id": user_id})
-            logger.info(f"🗑️ Deleted {delete_result.deleted_count} existing emails for user {user_id}")
-        except Exception as delete_error:
-            logger.error(f"⚠️ Failed to delete existing emails for user {user_id}: {delete_error}")
-            # Continue anyway
+            existing_cursor = emails_coll.find({"user_id": user_id}, {"id": 1})
+            existing_emails = await existing_cursor.to_list(length=None)
+            existing_email_ids = {email.get("id") for email in existing_emails if email.get("id")}
+            logger.info(f"📊 Found {len(existing_email_ids)} existing emails for user {user_id}")
+        except Exception as existing_error:
+            logger.error(f"⚠️ Failed to check existing emails: {existing_error}")
+            # Continue anyway with empty set
         
-        # Insert in batches
+        # Filter out duplicate emails (by email ID)
+        new_emails = []
+        duplicates_skipped = 0
+        emails_without_ids = 0
+        
+        for email in processed_emails:
+            email_id = email.get("id")
+            
+            # 🔧 CRITICAL FIX: Handle emails without IDs
+            if not email_id or email_id == "":
+                # Generate a unique ID based on content if missing
+                import hashlib
+                content_for_id = f"{email.get('subject', '')}{email.get('sender', '')}{email.get('date', '')}{email.get('snippet', '')}"
+                email_id = hashlib.md5(content_for_id.encode()).hexdigest()
+                email["id"] = email_id
+                emails_without_ids += 1
+                logger.warning(f"⚠️ Email missing ID, generated: {email_id[:8]}... from content")
+            
+            if email_id in existing_email_ids:
+                duplicates_skipped += 1
+                logger.debug(f"🔄 Skipping duplicate email: {email_id[:8]}...")
+                continue
+            
+            new_emails.append(email)
+            logger.debug(f"📧 New email added: {email_id[:8]}... | {email.get('subject', 'No Subject')[:50]}")
+        
+        logger.info(f"📧 Email deduplication: {len(new_emails)} new emails, {duplicates_skipped} duplicates skipped, {emails_without_ids} missing IDs fixed")
+        
+        if not new_emails:
+            logger.info(f"✅ No new emails to insert for user {user_id} (all were duplicates)")
+            return {
+                "success": True,
+                "inserted": 0,
+                "filtered": email_filter.stats.get("promotional_filtered", 0),
+                "financial": email_filter.stats.get("financial_preserved", 0),
+                "duplicates_skipped": duplicates_skipped,
+                "emails_without_ids": emails_without_ids,
+                "original_count": len(emails_data)
+            }
+        
+        # Insert new emails in batches using upsert
         batch_size = DATABASE_INSERT_BATCH_SIZE
         total_inserted = 0
+        total_upserted = 0
+        failed_operations = 0
         
-        logger.info(f"📥 Starting batch insertion of {len(processed_emails)} emails (batch size: {batch_size})")
+        logger.info(f"📥 Starting batch insertion of {len(new_emails)} NEW emails (batch size: {batch_size})")
         
-        for i in range(0, len(processed_emails), batch_size):
-            batch = processed_emails[i:i + batch_size]
+        for i in range(0, len(new_emails), batch_size):
+            batch = new_emails[i:i + batch_size]
             
             try:
                 logger.info(f"📥 Inserting batch {i//batch_size + 1}: {len(batch)} emails...")
-                result = await emails_coll.insert_many(batch, ordered=False)
-                batch_inserted = len(result.inserted_ids)
-                total_inserted += batch_inserted
-                logger.info(f"✅ Inserted batch {i//batch_size + 1}: {batch_inserted} complete emails (total: {total_inserted})")
+                
+                # 🔧 CRITICAL FIX: Convert datetime objects to strings for MongoDB
+                serialized_batch = []
+                for email in batch:
+                    serialized_email = {}
+                    for key, value in email.items():
+                        if isinstance(value, datetime):
+                            # Convert datetime to ISO string
+                            serialized_email[key] = value.isoformat()
+                        elif hasattr(value, 'isoformat'):  # Handle other datetime-like objects
+                            try:
+                                serialized_email[key] = value.isoformat()
+                            except Exception as dt_error:
+                                # If isoformat fails, convert to string
+                                serialized_email[key] = str(value)
+                                logger.warning(f"⚠️ Failed to convert datetime field '{key}' to ISO format: {dt_error}")
+                        elif isinstance(value, (list, dict)):
+                            # Handle nested objects that might contain datetime
+                            serialized_email[key] = json.loads(json.dumps(value, default=str))
+                        else:
+                            serialized_email[key] = value
+                    serialized_batch.append(serialized_email)
+                
+                # Use upsert operations to handle any remaining duplicates gracefully
+                bulk_operations = []
+                for email in serialized_batch:
+                    email_id = email.get("id")
+                    if email_id:
+                        # Use upsert for emails with ID - FIXED: Use PyMongo UpdateOne class
+                        bulk_operations.append(
+                            UpdateOne(
+                                filter={"user_id": user_id, "id": email_id},
+                                update={"$set": email},
+                                upsert=True
+                            )
+                        )
+                        logger.debug(f"🔄 Upsert operation for email: {email_id[:8]}...")
+                    else:
+                        # This should not happen now, but keep as fallback - FIXED: Use PyMongo InsertOne class
+                        logger.error(f"❌ Email still missing ID after fix: {email}")
+                        bulk_operations.append(
+                            InsertOne(document=email)
+                        )
+                
+                if bulk_operations:
+                    logger.info(f"📤 Executing {len(bulk_operations)} bulk operations...")
+                    result = await emails_coll.bulk_write(bulk_operations, ordered=False)
+                    
+                    batch_inserted = result.inserted_count
+                    batch_upserted = result.upserted_count
+                    batch_modified = result.modified_count
+                    
+                    total_inserted += batch_inserted
+                    total_upserted += batch_upserted
+                    
+                    logger.info(f"✅ Inserted batch {i//batch_size + 1}: inserted={batch_inserted}, upserted={batch_upserted}, modified={batch_modified}")
+                    logger.info(f"📊 Running totals: inserted={total_inserted}, upserted={total_upserted}")
+                else:
+                    logger.warning(f"⚠️ No bulk operations generated for batch {i//batch_size + 1}")
                 
             except Exception as e:
+                failed_operations += 1
                 logger.error(f"❌ Batch insert error for batch {i//batch_size + 1}: {e}")
                 logger.error(f"❌ Batch insert error type: {type(e).__name__}")
+                
+                # Log sample of failed emails for debugging
+                sample_emails = [{"id": email.get("id"), "subject": email.get("subject", "")[:50]} for email in batch[:3]]
+                logger.error(f"❌ Sample failed emails: {sample_emails}")
+                
+                # 🔧 CRITICAL DEBUG: Check if it's a bulk operation format issue
+                if "bulk_write" in str(e).lower() or "command" in str(e).lower():
+                    logger.error(f"❌ Likely bulk operation format error - check PyMongo operation classes")
+                    logger.error(f"❌ Bulk operations count: {len(bulk_operations)}")
+                    if bulk_operations:
+                        logger.error(f"❌ First bulk operation type: {type(bulk_operations[0])}")
+                
+                # 🔧 CRITICAL DEBUG: Log serialization issues
+                for email in serialized_batch[:1]:  # Check first email for datetime issues
+                    datetime_fields = []
+                    unsupported_fields = []
+                    for key, value in email.items():
+                        if isinstance(value, datetime) or hasattr(value, 'isoformat'):
+                            datetime_fields.append(f"{key}: {type(value).__name__}")
+                        elif not isinstance(value, (str, int, float, bool, list, dict, type(None))):
+                            unsupported_fields.append(f"{key}: {type(value).__name__}")
+                    if datetime_fields:
+                        logger.error(f"❌ Datetime fields found: {datetime_fields}")
+                    if unsupported_fields:
+                        logger.error(f"❌ Unsupported data types found: {unsupported_fields}")
+                
                 import traceback
                 logger.error(f"❌ Batch insert traceback: {traceback.format_exc()}")
+        
+        # Calculate total successfully processed
+        total_successful = total_inserted + total_upserted
+        
+        # Get current total email count after insertion
+        try:
+            total_emails_now = await emails_coll.count_documents({"user_id": user_id})
+            logger.info(f"📊 Total emails in database for user {user_id}: {total_emails_now}")
+        except Exception as count_error:
+            logger.error(f"⚠️ Failed to count total emails: {count_error}")
+            total_emails_now = "unknown"
         
         # Get filtering statistics
         filter_stats = email_filter.get_filter_stats()
         
         logger.info(f"✅ Email processing complete for user {user_id}:")
         logger.info(f"   📊 Original emails: {len(emails_data)}")
-        logger.info(f"   📧 Emails stored: {total_inserted}")
+        logger.info(f"   📧 New emails inserted: {total_inserted}")
+        logger.info(f"   🔄 New emails upserted: {total_upserted}")
+        logger.info(f"   📈 Total successful: {total_successful}")
+        logger.info(f"   🔄 Duplicates skipped: {duplicates_skipped}")
+        logger.info(f"   🆔 Missing IDs fixed: {emails_without_ids}")
+        logger.info(f"   📊 Total emails in DB: {total_emails_now}")
+        logger.info(f"   ❌ Failed operations: {failed_operations}")
         logger.info(f"   🗑️ Promotional filtered: {filter_stats['promotional_filtered']}")
         logger.info(f"   💰 Financial preserved: {filter_stats['financial_preserved']}")
         logger.info(f"   💾 Space saved: {filter_stats['space_saved_percent']}%")
         
-        if total_inserted == 0:
+        if total_successful == 0 and duplicates_skipped == 0:
             logger.error(f"❌ CRITICAL: No emails were inserted for user {user_id}!")
             logger.error(f"   📊 Original count: {len(emails_data)}")
             logger.error(f"   🎯 Filtered count: {len(filtered_emails)}")
             logger.error(f"   🔄 Processed count: {len(processed_emails)}")
+            logger.error(f"   🆔 Emails without IDs: {emails_without_ids}")
+            logger.error(f"   💾 Bulk operations failed: {failed_operations}")
         
         return {
             "success": True,
-            "inserted": total_inserted,
+            "inserted": total_successful,  # Total of inserted + upserted
             "filtered": filter_stats["promotional_filtered"],
             "financial": filter_stats["financial_preserved"],
+            "duplicates_skipped": duplicates_skipped,
+            "emails_without_ids": emails_without_ids,
+            "failed_operations": failed_operations,
             "filter_stats": filter_stats,
-            "original_count": len(emails_data)
+            "original_count": len(emails_data),
+            "total_emails_in_db": total_emails_now
         }
         
     except Exception as e:

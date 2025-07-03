@@ -67,9 +67,34 @@ from .models import (
     BrowserAutomationRequest
 )
 
-# Configure basic logging
-logging.basicConfig(level=logging.INFO)
+# Configure comprehensive logging with detailed format
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s | %(name)s | %(levelname)s | %(funcName)s:%(lineno)d | %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('logs/main.log', mode='a')
+    ]
+)
 logger = logging.getLogger(__name__)
+
+# Create separate loggers for different components
+auth_logger = logging.getLogger(f"{__name__}.auth")
+email_logger = logging.getLogger(f"{__name__}.email")
+financial_logger = logging.getLogger(f"{__name__}.financial")
+websocket_logger = logging.getLogger(f"{__name__}.websocket")
+worker_logger = logging.getLogger(f"{__name__}.worker")
+db_logger = logging.getLogger(f"{__name__}.database")
+performance_logger = logging.getLogger(f"{__name__}.performance")
+
+# Ensure logs directory exists
+import os
+os.makedirs('logs', exist_ok=True)
+
+logger.info("🚀 MAIN APPLICATION STARTUP - Enhanced logging initialized")
+logger.info(f"📊 Logging configuration: Level={logging.getLevelName(logger.level)}, Format=Enhanced")
+logger.info(f"📝 Log file: logs/main.log")
+logger.info(f"🔍 Component loggers: auth, email, financial, websocket, worker, database, performance")
 
 app = FastAPI(
     title="Gmail Chatbot API",
@@ -253,68 +278,89 @@ class TestMem0QueryPayload(BaseModel):
 
 @app.post("/auth/google-login")
 async def google_login(payload: GoogleToken):
-    logger.info(f"Received request for /auth/google-login with token: {payload.token[:30]}...")
+    start_time = datetime.now()
+    request_id = f"auth_{int(time.time() * 1000)}"
+    auth_logger.info(f"🔐 [START] GOOGLE LOGIN - Request ID: {request_id}, Token length: {len(payload.token) if payload.token else 0}")
+    
     try:
-        logger.info("Verifying Google token...")
+        # Step 1: Verify Google token
+        auth_logger.info(f"🔍 [STEP 1] Verifying Google token - Request ID: {request_id}")
         raw_user_info_from_google = verify_google_token(payload.token)
-        logger.info(f"Google token verified. Raw User info from Google: {raw_user_info_from_google}")
+        auth_logger.info(f"✅ [STEP 1] Google token verified successfully - Request ID: {request_id}")
 
         user_id_from_google = raw_user_info_from_google["user_id"]
-        logger.info(f"Checking user in database: {user_id_from_google}")
+        user_email = raw_user_info_from_google.get("email", "N/A")
+        user_name = raw_user_info_from_google.get("name", "N/A")
         
-        # Fetch user from DB to get the version with _id (if it exists)
+        auth_logger.info(f"👤 [USER INFO] ID: {user_id_from_google}, Email: {user_email}, Name: {user_name}")
+        
+        # Step 2: Check if user exists in database
+        db_logger.info(f"🔍 [STEP 2] Checking user in database - User ID: {user_id_from_google}")
         user_in_db = await users_collection.find_one({"user_id": user_id_from_google})
         
         final_user_info_to_return = {}
 
         if not user_in_db:
-            logger.info("User not found, creating new user with Google info...")
-            # Use the info directly from Google for the first insert
-            # MongoDB will add an _id field automatically
-            user_to_insert = raw_user_info_from_google.copy() # Use a copy
-            user_to_insert['initial_gmailData_sync'] = False # Initialize initial_gmailData_sync
-            user_to_insert['fetched_email'] = False  # Initialize fetched_email
-            # Initialize financial analysis fields
+            # Step 3A: Create new user
+            auth_logger.info(f"➕ [STEP 3A] User not found, creating new user - User ID: {user_id_from_google}")
+            
+            user_to_insert = raw_user_info_from_google.copy()
+            user_to_insert['initial_gmailData_sync'] = False
+            user_to_insert['fetched_email'] = False
             user_to_insert['financial_analysis_completed'] = False
             user_to_insert['financial_analysis_date'] = None
             user_to_insert['financial_transactions_count'] = 0
             user_to_insert['financial_processing_method'] = None
+            user_to_insert['created_at'] = datetime.now().isoformat()
+            user_to_insert['last_login'] = datetime.now().isoformat()
+            
+            db_logger.info(f"💾 [DATABASE] Inserting new user - User ID: {user_id_from_google}")
             insert_result = await users_collection.insert_one(user_to_insert)
-            logger.info(f"New user created. Inserted ID: {insert_result.inserted_id}")
-            # Fetch the newly created user to get all fields including the auto-generated _id
+            db_logger.info(f"✅ [DATABASE] New user created with MongoDB ID: {insert_result.inserted_id}")
+            
+            # Fetch the newly created user
             final_user_info_to_return = await users_collection.find_one({"_id": insert_result.inserted_id})
             if not final_user_info_to_return:
-                 logger.error("CRITICAL: User just inserted but not found by _id!")
-                 final_user_info_to_return = raw_user_info_from_google # Fallback, but _id will be missing
+                auth_logger.error(f"❌ [CRITICAL] User just inserted but not found by _id - User ID: {user_id_from_google}")
+                final_user_info_to_return = raw_user_info_from_google
         else:
-            logger.info("User found in database.")
+            # Step 3B: User exists - update last login
+            auth_logger.info(f"✅ [STEP 3B] User found in database - User ID: {user_id_from_google}")
+            
+            # Update last login time
+            await users_collection.update_one(
+                {"user_id": user_id_from_google},
+                {"$set": {"last_login": datetime.now().isoformat()}}
+            )
+            db_logger.info(f"📝 [DATABASE] Updated last login time for user: {user_id_from_google}")
+            
             final_user_info_to_return = user_in_db
 
-        # Ensure _id (and any other ObjectId) is converted to string before returning
+        # Step 4: Serialize user info
+        auth_logger.info(f"🔄 [STEP 4] Converting ObjectId to string for serialization")
         serializable_user_info = convert_objectid_to_str(final_user_info_to_return)
-        logger.info(f"Serializable user info for response: {serializable_user_info}")
+        auth_logger.info(f"📋 [USER DATA] Serialized user info ready for response")
 
-        logger.info("Creating JWT token...")
-        # Create JWT based on consistent user_id and email
+        # Step 5: Create JWT token
+        auth_logger.info(f"🔑 [STEP 5] Creating JWT token - User ID: {user_id_from_google}")
         jwt_payload_data = {"user_id": serializable_user_info["user_id"], "email": serializable_user_info["email"]}
         jwt_token = create_jwt_token(jwt_payload_data)
-        logger.info("JWT token created successfully.")
+        auth_logger.info(f"✅ [STEP 5] JWT token created successfully")
         
-        {
-            "jwt_token": jwt_token,
-            "user": {
-                "email": serializable_user_info["email"],
-                "name": serializable_user_info["name"],
-                "picture": serializable_user_info["picture"],
-                "user_id": serializable_user_info["user_id"],
-            },
-        }
+        # Calculate processing time
+        processing_time = (datetime.now() - start_time).total_seconds()
+        auth_logger.info(f"🎉 [COMPLETE] GOOGLE LOGIN SUCCESS - Request ID: {request_id}, User: {user_email}, Time: {processing_time:.2f}s")
+        
         return {"jwt_token": jwt_token, "user": serializable_user_info}
+        
     except HTTPException as e:
-        logger.error(f"HTTPException in google_login: {e.detail}", exc_info=True)
+        processing_time = (datetime.now() - start_time).total_seconds()
+        auth_logger.error(f"❌ [HTTP ERROR] Google login failed - Request ID: {request_id}, Time: {processing_time:.2f}s, Error: {e.detail}")
         raise 
     except Exception as e:
-        logger.error(f"Unexpected error in google_login: {str(e)}", exc_info=True)
+        processing_time = (datetime.now() - start_time).total_seconds()
+        auth_logger.error(f"❌ [SYSTEM ERROR] Google login failed - Request ID: {request_id}, Time: {processing_time:.2f}s, Error: {str(e)}")
+        auth_logger.error(f"🔍 [DEBUG] Token preview: {str(payload.token)[:50]}...")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
             detail=f"An unexpected error occurred: {str(e)}"
@@ -737,22 +783,37 @@ async def check_and_fetch_new_user_emails():
     PROGRESSIVE LOADING: Process only IMMEDIATE emails (1-week recent data)
     This allows users to start querying immediately while historical data loads in background
     """
-    logger.info("🔄 [PROGRESSIVE] Background worker: Checking for users with fetched_email=false")
+    start_time = datetime.now()
+    worker_id = f"email_worker_{int(time.time() * 1000)}"
+    worker_logger.info(f"📧 [START] EMAIL WORKER - Worker ID: {worker_id}, Interval: 15s")
+    
     try:
+        # Step 1: Find users needing immediate email processing
+        worker_logger.info(f"🔍 [STEP 1] Searching for users with fetched_email=false - Worker ID: {worker_id}")
         users_to_fetch = users_collection.find({"fetched_email": False})
+        
         users_found = 0
+        users_processed = 0
+        users_skipped = 0
+        users_failed = 0
+        
         async for user in users_to_fetch:
             users_found += 1
             user_id = user.get("user_id")
+            user_email = user.get("email", "N/A")
             access_token = user.get("access_token")
             
+            worker_logger.info(f"👤 [USER {users_found}] Found user - ID: {user_id}, Email: {user_email}")
+            
             if not user_id or not access_token:
-                logger.warning(f"⚠️ [PROGRESSIVE] Background worker: Skipping user {user.get('_id')} due to missing user_id or access_token.")
+                users_skipped += 1
+                worker_logger.warning(f"⚠️ [SKIP] User {users_found} missing credentials - UserID: {bool(user_id)}, Token: {bool(access_token)}")
                 continue
 
-            logger.info(f"🚀 [PROGRESSIVE] Background worker: Found user {user_id} with fetched_email=false. Starting IMMEDIATE processing.")
+            worker_logger.info(f"🚀 [PROCESSING] Starting immediate email processing - User: {user_id}")
             
-            # Reset all sync flags when starting new email fetch
+            # Step 2: Reset all sync flags when starting new email fetch
+            db_logger.info(f"🔄 [DATABASE] Resetting sync flags for user: {user_id}")
             await users_collection.update_one(
                 {"user_id": user_id},
                 {"$set": {
@@ -761,93 +822,136 @@ async def check_and_fetch_new_user_emails():
                     "background_sync_needed": False,
                     "historical_sync_completed": False,
                     "recent_financial_transactions": 0,
-                    "complete_financial_ready": False
+                    "complete_financial_ready": False,
+                    "processing_started_at": datetime.now().isoformat()
                 }}
             )
-            logger.info(f"🔄 [PROGRESSIVE] Reset all sync flags for user {user_id}")
+            worker_logger.info(f"✅ [DATABASE] Sync flags reset for user: {user_id}")
             
             try:
-                # 🎯 PHASE 1: Process IMMEDIATE emails (1-week recent data) - 60 seconds max
-                logger.info(f"⚡ [PHASE 1] Starting IMMEDIATE email processing for user {user_id} (1-week recent data)")
+                # Step 3: Process IMMEDIATE emails (1-week recent data)
+                process_start = datetime.now()
+                worker_logger.info(f"⚡ [PHASE 1] Starting IMMEDIATE email processing - User: {user_id}, Data: 1-week recent")
+                
                 immediate_result = await _process_immediate_emails(user_id=user_id, access_token=access_token, days=7)
-                logger.info(f"⚡ [PHASE 1] Immediate processing result for user {user_id}: {immediate_result}")
+                process_time = (datetime.now() - process_start).total_seconds()
+                
+                worker_logger.info(f"⚡ [PHASE 1] Processing complete - User: {user_id}, Time: {process_time:.2f}s")
                 
                 if immediate_result.get("success", False):
-                    logger.info(f"🎉 [PHASE 1] IMMEDIATE processing completed successfully for user {user_id}!")
-                    logger.info(f"   📧 Recent emails processed: {immediate_result.get('emails_processed', 0)}")
-                    logger.info(f"   💰 Recent financial transactions: {immediate_result.get('financial_transactions', 0)}")
-                    logger.info(f"   ⏱️ Processing time: {immediate_result.get('processing_time', 'N/A')}")
+                    users_processed += 1
+                    emails_processed = immediate_result.get('emails_processed', 0)
+                    financial_transactions = immediate_result.get('financial_transactions', 0)
+                    
+                    worker_logger.info(f"🎉 [SUCCESS] IMMEDIATE processing completed - User: {user_id}")
+                    worker_logger.info(f"📊 [RESULTS] Emails: {emails_processed}, Financial: {financial_transactions}")
+                    worker_logger.info(f"⏱️ [PERFORMANCE] Total time: {process_time:.2f}s")
                     
                     # Console message for user feedback
                     print(f"\n{'='*80}")
                     print(f"🎉 DASHBOARD READY for User: {user_id}")
-                    print(f"📊 Recent emails processed: {immediate_result.get('emails_processed', 0)}")
-                    print(f"💰 Recent financial transactions: {immediate_result.get('financial_transactions', 0)}")
+                    print(f"📊 Recent emails processed: {emails_processed}")
+                    print(f"💰 Recent financial transactions: {financial_transactions}")
                     print(f"✅ User can start querying immediately!")
                     print(f"🔄 Background: 6-month historical data loading...")
+                    print(f"⏱️ Processing time: {process_time:.2f}s")
                     print(f"{'='*80}\n")
                     
-                    # Flags are already updated in _process_immediate_emails function
-                    # User can now start querying with recent data
-                    
                 else:
-                    logger.error(f"❌ [PHASE 1] IMMEDIATE processing failed for user {user_id}: {immediate_result}")
-                    # Keep fetched_email=false so it can be retried later
+                    users_failed += 1
+                    error_msg = immediate_result.get("message", "Unknown error")
+                    worker_logger.error(f"❌ [FAILED] IMMEDIATE processing failed - User: {user_id}, Error: {error_msg}")
+                    worker_logger.error(f"🔍 [DEBUG] Full result: {immediate_result}")
                     
             except Exception as user_error:
-                logger.error(f"❌ [PROGRESSIVE] Failed to process IMMEDIATE emails for user {user_id}: {str(user_error)}", exc_info=True)
-                # Keep fetched_email=false so it can be retried later
-                logger.info(f"🔄 [PROGRESSIVE] User {user_id} will be retried in next cycle")
+                users_failed += 1
+                process_time = (datetime.now() - process_start).total_seconds()
+                worker_logger.error(f"❌ [EXCEPTION] Processing failed - User: {user_id}, Time: {process_time:.2f}s, Error: {str(user_error)}")
+                worker_logger.error(f"🔍 [DEBUG] Exception details: {str(user_error)}", exc_info=True)
+                worker_logger.info(f"🔄 [RETRY] User {user_id} will be retried in next cycle")
 
+        # Step 4: Final summary and statistics
+        total_time = (datetime.now() - start_time).total_seconds()
+        
         if users_found == 0:
-            logger.info("✅ [PROGRESSIVE] Background worker: No users found with fetched_email=false")
+            worker_logger.info(f"📭 [SUMMARY] No users found needing email processing - Worker ID: {worker_id}")
         else:
-            logger.info(f"📊 [PROGRESSIVE] Background worker: Processed {users_found} users for IMMEDIATE sync")
+            worker_logger.info(f"📊 [SUMMARY] Email Worker Statistics - Worker ID: {worker_id}")
+            worker_logger.info(f"   👥 Users found: {users_found}")
+            worker_logger.info(f"   ✅ Users processed: {users_processed}")
+            worker_logger.info(f"   ⚠️ Users skipped: {users_skipped}")
+            worker_logger.info(f"   ❌ Users failed: {users_failed}")
+            worker_logger.info(f"   ⏱️ Total time: {total_time:.2f}s")
+            worker_logger.info(f"   📈 Success rate: {(users_processed/users_found*100):.1f}%")
             
-        logger.info("🏁 [PROGRESSIVE] Background worker: Finished checking for users.")
+        performance_logger.info(f"🎯 [PERFORMANCE] EMAIL WORKER - Found: {users_found}, Processed: {users_processed}, Time: {total_time:.2f}s")
+        worker_logger.info(f"🏁 [COMPLETE] EMAIL WORKER FINISHED - Worker ID: {worker_id}")
+        
     except Exception as e:
-        logger.error(f"❌ [PROGRESSIVE] Background worker: Error during check_and_fetch_new_user_emails: {str(e)}", exc_info=True)
+        total_time = (datetime.now() - start_time).total_seconds()
+        worker_logger.error(f"❌ [CRITICAL] Email worker system error - Worker ID: {worker_id}, Time: {total_time:.2f}s")
+        worker_logger.error(f"🔍 [DEBUG] System error details: {str(e)}", exc_info=True)
 
 async def check_and_process_financial_analysis():
     """
     Background worker to process financial analysis for users who have completed email sync
     but haven't completed financial analysis yet.
     """
-    logger.info("Financial worker: Checking for users needing financial analysis")
+    start_time = datetime.now()
+    worker_id = f"financial_worker_{int(time.time() * 1000)}"
+    financial_logger.info(f"💰 [START] FINANCIAL WORKER - Worker ID: {worker_id}, Interval: 40s")
+    
     try:
-        # Find users who have completed historical sync but not complete financial analysis
+        # Step 1: Find users needing complete financial analysis
+        financial_logger.info(f"🔍 [STEP 1] Searching for users needing complete financial analysis - Worker ID: {worker_id}")
         users_to_process = users_collection.find({
             "historical_sync_completed": True,
             "financial_analysis_completed": False
         })
         
         users_found = 0
+        users_processed = 0
+        users_failed = 0
+        
         async for user in users_to_process:
             users_found += 1
             user_id = user.get("user_id")
+            user_email = user.get("email", "N/A")
+            historical_sync_date = user.get("historical_sync_date", "N/A")
             
             if not user_id:
-                logger.warning(f"Financial worker: Skipping user {user.get('_id')} due to missing user_id.")
+                financial_logger.warning(f"⚠️ [SKIP] User {users_found} missing user_id - MongoDB ID: {user.get('_id')}")
                 continue
 
-            logger.info(f"Financial worker: Found user {user_id} needing COMPLETE financial analysis. Starting processing.")
+            financial_logger.info(f"👤 [USER {users_found}] Found user needing complete analysis - ID: {user_id}, Email: {user_email}")
+            financial_logger.info(f"📅 [CONTEXT] Historical sync completed: {historical_sync_date}")
             
             try:
-                # Import the fast processing logic
+                # Step 2: Process complete financial transactions
+                financial_logger.info(f"🚀 [PROCESSING] Starting complete financial analysis - User: {user_id}")
+                
                 from app.fast_financial_processor import process_financial_transactions_from_mongodb
                 
-                # Process COMPLETE financial transactions (recent + historical) with timeout
+                process_start = datetime.now()
                 result = await asyncio.wait_for(
                     process_financial_transactions_from_mongodb(user_id),
                     timeout=EMAIL_PROCESSING_TIMEOUT
                 )
+                process_time = (datetime.now() - process_start).total_seconds()
+                
+                financial_logger.info(f"🔄 [PROCESSING] Financial analysis complete - User: {user_id}, Time: {process_time:.2f}s")
                 
                 if result["status"] == "success":
+                    users_processed += 1
                     total_transactions = result.get('transactions_found', 0)
-                    logger.info(f"Financial worker: Successfully processed COMPLETE financial data for user {user_id}")
-                    logger.info(f"Financial worker: Found {total_transactions} total transactions (recent + historical)")
+                    total_amount = result.get('total_amount', 0)
                     
-                    # Update user status with complete financial information
+                    financial_logger.info(f"✅ [SUCCESS] Complete financial analysis done - User: {user_id}")
+                    financial_logger.info(f"📊 [RESULTS] Transactions: {total_transactions}, Total Amount: ₹{total_amount:,.2f}")
+                    financial_logger.info(f"⏱️ [PERFORMANCE] Processing time: {process_time:.2f}s")
+                    
+                    # Step 3: Update user status
+                    db_logger.info(f"💾 [DATABASE] Updating financial analysis status - User: {user_id}")
                     await users_collection.update_one(
                         {"user_id": user_id},
                         {"$set": {
@@ -855,7 +959,8 @@ async def check_and_process_financial_analysis():
                             "financial_analysis_date": datetime.now().isoformat(),
                             "financial_transactions_count": total_transactions,
                             "financial_processing_method": "complete_mongodb",
-                            "complete_financial_ready": True
+                            "complete_financial_ready": True,
+                            "financial_analysis_processing_time": process_time
                         }}
                     )
                     
@@ -863,27 +968,47 @@ async def check_and_process_financial_analysis():
                     print(f"\n{'='*80}")
                     print(f"💰 COMPLETE FINANCIAL ANALYSIS DONE for User: {user_id}")
                     print(f"📊 Total financial transactions: {total_transactions}")
+                    print(f"💵 Total amount analyzed: ₹{total_amount:,.2f}")
                     print(f"✅ Full financial insights now available for queries")
+                    print(f"⏱️ Processing time: {process_time:.2f}s")
                     print(f"{'='*80}\n")
                     
                 else:
-                    logger.error(f"Financial worker: Failed to process complete financial data for user {user_id}: {result.get('error', 'Unknown error')}")
+                    users_failed += 1
+                    error_msg = result.get('error', 'Unknown error')
+                    financial_logger.error(f"❌ [FAILED] Financial analysis failed - User: {user_id}, Error: {error_msg}")
+                    financial_logger.error(f"🔍 [DEBUG] Full result: {result}")
                     
             except asyncio.TimeoutError:
-                logger.error(f"Financial worker: Timeout processing financial data for user {user_id}")
-                # Don't reset the flag on timeout, let it retry later
+                users_failed += 1
+                financial_logger.error(f"⏰ [TIMEOUT] Financial analysis timeout - User: {user_id}, Timeout: {EMAIL_PROCESSING_TIMEOUT}s")
+                financial_logger.info(f"🔄 [RETRY] User {user_id} will be retried in next cycle")
             except Exception as user_error:
-                logger.error(f"Financial worker: Failed to process financial data for user {user_id}: {str(user_error)}", exc_info=True)
-                # Don't reset the flag on error, let it retry later
+                users_failed += 1
+                process_time = (datetime.now() - process_start).total_seconds()
+                financial_logger.error(f"❌ [EXCEPTION] Financial analysis failed - User: {user_id}, Time: {process_time:.2f}s, Error: {str(user_error)}")
+                financial_logger.error(f"🔍 [DEBUG] Exception details: {str(user_error)}", exc_info=True)
 
+        # Step 4: Final summary and statistics
+        total_time = (datetime.now() - start_time).total_seconds()
+        
         if users_found == 0:
-            logger.info("Financial worker: No users found needing financial analysis")
+            financial_logger.info(f"📭 [SUMMARY] No users found needing financial analysis - Worker ID: {worker_id}")
         else:
-            logger.info(f"Financial worker: Processed financial analysis for {users_found} users")
+            financial_logger.info(f"📊 [SUMMARY] Financial Worker Statistics - Worker ID: {worker_id}")
+            financial_logger.info(f"   👥 Users found: {users_found}")
+            financial_logger.info(f"   ✅ Users processed: {users_processed}")
+            financial_logger.info(f"   ❌ Users failed: {users_failed}")
+            financial_logger.info(f"   ⏱️ Total time: {total_time:.2f}s")
+            financial_logger.info(f"   📈 Success rate: {(users_processed/users_found*100):.1f}%")
             
-        logger.info("Financial worker: Finished checking for financial analysis.")
+        performance_logger.info(f"🎯 [PERFORMANCE] FINANCIAL WORKER - Found: {users_found}, Processed: {users_processed}, Time: {total_time:.2f}s")
+        financial_logger.info(f"🏁 [COMPLETE] FINANCIAL WORKER FINISHED - Worker ID: {worker_id}")
+        
     except Exception as e:
-        logger.error(f"Financial worker: Error during check_and_process_financial_analysis: {str(e)}", exc_info=True)
+        total_time = (datetime.now() - start_time).total_seconds()
+        financial_logger.error(f"❌ [CRITICAL] Financial worker system error - Worker ID: {worker_id}, Time: {total_time:.2f}s")
+        financial_logger.error(f"🔍 [DEBUG] System error details: {str(e)}", exc_info=True)
 
 @app.on_event("startup")
 async def startup_event():
@@ -901,8 +1026,8 @@ async def startup_event():
     # Schedule the NEW background historical sync job to run every 120 seconds (non-blocking, reduced frequency)
     scheduler.add_job(check_and_process_background_historical_sync, "interval", seconds=120, id="historical_sync_job", max_instances=1)
     
-    # Schedule the financial analysis job to run every 90 seconds (offset to avoid conflicts)
-    scheduler.add_job(check_and_process_financial_analysis, "interval", seconds=90, id="financial_analysis_job", max_instances=1)
+    # Schedule the financial analysis job to run every 40 seconds (offset to avoid conflicts)
+    scheduler.add_job(check_and_process_financial_analysis, "interval", seconds=40, id="financial_analysis_job", max_instances=1)
     
     # Performance monitoring is handled by middleware
     # asyncio.create_task(performance_monitor())
@@ -916,9 +1041,9 @@ async def startup_event():
     logger.info(f"   • Smart caching: {'Enabled' if ENABLE_SMART_CACHING else 'Disabled'}")
     logger.info(f"   • Batch processing: {'Enabled' if ENABLE_BATCH_PROCESSING else 'Disabled'}")
     logger.info("   • Performance monitoring: Active")
-    logger.info("📧 Job 'fetch_new_emails_job' scheduled every 10 seconds.")
-    logger.info("🔄 Job 'historical_sync_job' scheduled every 30 seconds (NEW).")
-    logger.info("💰 Job 'financial_analysis_job' scheduled every 45 seconds.")
+    logger.info("📧 Job 'fetch_new_emails_job' scheduled every 15 seconds.")
+    logger.info("🔄 Job 'historical_sync_job' scheduled every 120 seconds (NEW).")
+    logger.info("💰 Job 'financial_analysis_job' scheduled every 40 seconds.")
     logger.info("🎯 PROGRESSIVE LOADING: Users can query immediately after 1-week sync!")
 
 @app.on_event("shutdown")
@@ -929,24 +1054,157 @@ async def shutdown_event():
 @app.post("/gmail/query")
 async def gmail_query_endpoint(payload: TestMem0QueryPayload):
     """
-    HTTP endpoint for Gmail Intelligence queries (alternative to WebSocket)
+    Enhanced HTTP endpoint for Gmail Intelligence queries with intelligent data source selection
     """
-    logger.info(f"Received Gmail query request for user_id: {payload.user_id} with query: {payload.query}")
+    logger.info(f"🚀 Enhanced Gmail query request for user_id: {payload.user_id} with query: {payload.query}")
     try:
-        # Use the existing query_mem0 function
-        response = await query_mem0(user_id=payload.user_id, query=payload.query)
+        # Use the new enhanced query processing system
+        from .enhanced_query_processor import enhanced_query_processor
+        
+        enhanced_response = await enhanced_query_processor.process_enhanced_query(
+            user_id=payload.user_id, 
+            query=payload.query
+        )
         
         return {
             "status": "success",
-            "message": response,
+            "message": enhanced_response.final_response,
             "user_id": payload.user_id,
-            "query": payload.query
+            "query": payload.query,
+            "enhanced_data": {
+                "query_classification": {
+                    "type": enhanced_response.classification.query_type,
+                    "confidence": enhanced_response.classification.confidence,
+                    "financial_keywords": enhanced_response.classification.financial_keywords,
+                    "sub_questions_generated": len(enhanced_response.classification.sub_questions)
+                },
+                "data_sources_used": enhanced_response.data_sources_used,
+                "response_quality_score": enhanced_response.response_quality_score,
+                "mongodb_data_summary": {
+                    "total_transactions": enhanced_response.mongodb_data.total_transactions if enhanced_response.mongodb_data else 0,
+                    "total_amount": enhanced_response.mongodb_data.total_amount if enhanced_response.mongodb_data else 0,
+                    "merchants_found": len(enhanced_response.mongodb_data.merchants) if enhanced_response.mongodb_data else 0
+                } if enhanced_response.mongodb_data else None
+            }
         }
     except Exception as e:
-        logger.error(f"Error in Gmail query endpoint: {str(e)}", exc_info=True)
+        logger.error(f"❌ Error in enhanced Gmail query endpoint: {str(e)}", exc_info=True)
+        # Fallback to old system if enhanced processing fails
+        try:
+            logger.info("🔄 Falling back to original query system...")
+            response = await query_mem0(user_id=payload.user_id, query=payload.query)
+            return {
+                "status": "success",
+                "message": response,
+                "user_id": payload.user_id,
+                "query": payload.query,
+                "fallback_used": True
+            }
+        except Exception as fallback_error:
+            logger.error(f"❌ Fallback also failed: {str(fallback_error)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Query processing failed: {str(e)}"
+            )
+
+@app.post("/gmail/query/enhanced")
+async def enhanced_gmail_query_endpoint(payload: TestMem0QueryPayload):
+    """
+    🚀 NEW ENHANCED QUERY PROCESSING ENDPOINT
+    
+    This endpoint uses the intelligent hybrid query processing system that:
+    1. Classifies queries (GENERAL, FINANCIAL, MIXED)
+    2. Generates 8-9 sub-questions for comprehensive analysis
+    3. Retrieves structured data from MongoDB for financial queries
+    4. Combines MongoDB + Mem0 responses intelligently
+    5. Prioritizes actual transaction data over vague responses
+    
+    Example Financial Query: "List all transactions", "How much did I spend on food?"
+    Example General Query: "Show my job applications", "My travel bookings"
+    """
+    logger.info(f"🎯 NEW Enhanced Query Processing for user_id: {payload.user_id}")
+    logger.info(f"📝 Query: '{payload.query}'")
+    
+    try:
+        # Use the enhanced query processing system
+        from .enhanced_query_processor import enhanced_query_processor
+        
+        start_time = datetime.now()
+        
+        enhanced_response = await enhanced_query_processor.process_enhanced_query(
+            user_id=payload.user_id, 
+            query=payload.query
+        )
+        
+        processing_time = (datetime.now() - start_time).total_seconds()
+        
+        logger.info(f"✅ Enhanced processing completed in {processing_time:.2f}s")
+        logger.info(f"📊 Query Type: {enhanced_response.classification.query_type}")
+        logger.info(f"🎯 Quality Score: {enhanced_response.response_quality_score:.2%}")
+        logger.info(f"📚 Data Sources: {enhanced_response.data_sources_used}")
+        
+        return {
+            "status": "success",
+            "processing_method": "enhanced_hybrid_system",
+            "message": enhanced_response.final_response,
+            "user_id": payload.user_id,
+            "query": payload.query,
+            "processing_time_seconds": round(processing_time, 2),
+            "analytics": {
+                "query_classification": {
+                    "type": enhanced_response.classification.query_type,
+                    "confidence": round(enhanced_response.classification.confidence, 3),
+                    "financial_keywords_detected": enhanced_response.classification.financial_keywords,
+                    "sub_questions_generated": enhanced_response.classification.sub_questions,
+                    "mongodb_query_needed": enhanced_response.classification.mongodb_queries_needed,
+                    "mem0_query_needed": enhanced_response.classification.mem0_queries_needed
+                },
+                "data_sources": {
+                    "sources_used": enhanced_response.data_sources_used,
+                    "mongodb_data_available": enhanced_response.mongodb_data is not None,
+                    "mem0_data_available": enhanced_response.mem0_response is not None
+                },
+                "mongodb_financial_data": {
+                    "total_transactions": enhanced_response.mongodb_data.total_transactions if enhanced_response.mongodb_data else 0,
+                    "total_amount": round(enhanced_response.mongodb_data.total_amount, 2) if enhanced_response.mongodb_data else 0,
+                    "unique_merchants": len(enhanced_response.mongodb_data.merchants) if enhanced_response.mongodb_data else 0,
+                    "payment_methods": len(enhanced_response.mongodb_data.payment_methods) if enhanced_response.mongodb_data else 0,
+                    "date_range": enhanced_response.mongodb_data.date_range if enhanced_response.mongodb_data else {},
+                    "top_merchants": enhanced_response.mongodb_data.merchants if enhanced_response.mongodb_data else {}
+                },
+                "response_quality": {
+                    "quality_score": round(enhanced_response.response_quality_score, 3),
+                    "response_length": len(enhanced_response.final_response),
+                    "contains_specific_amounts": "₹" in enhanced_response.final_response,
+                    "contains_merchant_data": any(merchant in enhanced_response.final_response for merchant in (enhanced_response.mongodb_data.merchants.keys() if enhanced_response.mongodb_data else [])),
+                    "structured_formatting": "##" in enhanced_response.final_response
+                }
+            },
+            "system_info": {
+                "version": "Enhanced Query Processing v1.0",
+                "features": [
+                    "Intelligent query classification",
+                    "Sub-question generation",
+                    "MongoDB structured data retrieval", 
+                    "Mem0 contextual insights",
+                    "Hybrid response generation",
+                    "Quality scoring"
+                ],
+                "improvements_over_old_system": [
+                    "Actual transaction amounts instead of vague responses",
+                    "Specific merchant and payment method details",
+                    "Structured financial summaries",
+                    "Date ranges and time period analysis",
+                    "Combined intelligence from multiple data sources"
+                ]
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Enhanced query processing failed: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"An unexpected error occurred: {str(e)}"
+            detail=f"Enhanced query processing failed: {str(e)}"
         )
 
 @app.post("/admin/trigger-email-sync")
@@ -2445,18 +2703,54 @@ async def process_and_store_emails_non_blocking(user_id: str, emails: List[Dict]
             stored_count = storage_result.get("inserted", 0)
             logger.info(f"✅ [{processing_type.upper()}] Successfully stored {stored_count} emails")
             
-            # Upload to Mem0 in batches to prevent blocking
+            # 💰 OPTIMIZED: Extract financial transactions IMMEDIATELY after storage
+            financial_transactions = 0
+            try:
+                if stored_count > 0:
+                    logger.info(f"💰 [{processing_type.upper()}] Starting IMMEDIATE financial extraction")
+                    from .fast_financial_processor import process_financial_transactions_from_mongodb
+                    
+                    financial_start_time = datetime.now()
+                    financial_result = await process_financial_transactions_from_mongodb(user_id)
+                    
+                    if financial_result.get("status") == "success":
+                        financial_transactions = financial_result.get("transactions_found", 0)
+                        financial_time = (datetime.now() - financial_start_time).total_seconds()
+                        
+                        logger.info(f"💰 [{processing_type.upper()}] Financial extraction: {financial_transactions} transactions in {financial_time:.2f}s")
+                        
+                        # Update user flags for immediate financial availability
+                        await users_collection.update_one(
+                            {"user_id": user_id},
+                            {"$set": {
+                                "recent_financial_transactions": financial_transactions,
+                                "financial_extraction_completed": True,
+                                "financial_extraction_date": datetime.now().isoformat()
+                            }}
+                        )
+                        
+                        print(f"\n💰 FINANCIAL DATA READY for User: {user_id} ({financial_transactions} transactions)")
+                        
+            except Exception as financial_error:
+                logger.error(f"❌ [{processing_type.upper()}] Financial extraction error: {financial_error}")
+            
+            # 🧠 Upload to Mem0 AFTER financial extraction (moved to background)
             if stored_count > 0:
-                await upload_emails_to_mem0_non_blocking(user_id, filtered_emails[:stored_count], processing_type)
+                # Start as background task to not block financial data availability
+                asyncio.create_task(upload_emails_to_mem0_non_blocking(user_id, filtered_emails[:stored_count], processing_type))
+                logger.info(f"🧠 [{processing_type.upper()}] Mem0 upload started in background")
             
             return {
                 "success": True,
                 "status": "success",
                 "emails_stored": stored_count,
+                "financial_transactions": financial_transactions,
                 "promotional_filtered": len(emails) - len(filtered_emails),
                 "financial_preserved": sum(1 for email in filtered_emails if email.get("financial", False)),
                 "processing_type": processing_type,
-                "total_count": len(emails)
+                "total_count": len(emails),
+                "financial_ready": financial_transactions > 0,
+                "mem0_upload_status": "background_processing"
             }
         else:
             logger.error(f"❌ [{processing_type.upper()}] Failed to store emails: {storage_result}")
