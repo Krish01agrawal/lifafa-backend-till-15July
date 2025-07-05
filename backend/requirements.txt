@@ -19,6 +19,7 @@ motor==3.7.1                    # MongoDB async driver
 pymongo==4.13.0                 # MongoDB sync driver  
 certifi==2025.4.26              # SSL certificates
 asyncio==3.4.3                  # Async support (if needed)
+# nest-asyncio removed - not compatible with uvloop
 
 # ============================================================================
 # GOOGLE APIS & AUTHENTICATION

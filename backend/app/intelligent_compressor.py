@@ -84,16 +84,29 @@ class IntelligentCompressor:
     def compress_email_intelligently(self, email_data: Dict) -> Dict:
         """
         Intelligent compression based on email type and content importance
+        🔧 FIXED: Much more conservative compression that preserves important information
         """
         start_time = datetime.now()
         email_id = email_data.get('id', 'unknown')
         compression_id = f"comp_{email_id}_{int(time.time() * 1000)}"
         
-        compression_logger.info(f"🗜️ [START] INTELLIGENT COMPRESSION - Compression ID: {compression_id}")
+        compression_logger.info(f"🗜️ [START] CONSERVATIVE COMPRESSION - Compression ID: {compression_id}")
         compression_logger.info(f"📧 [INPUT] Email ID: {email_id}, Subject: {email_data.get('subject', 'N/A')[:50]}...")
         
         original_size = len(str(email_data))
         compression_logger.info(f"📏 [SIZE] Original size: {original_size} characters")
+        
+        # 🔧 NEW: Check for environment variable to disable compression entirely
+        import os
+        if os.getenv('DISABLE_EMAIL_COMPRESSION', 'false').lower() == 'true':
+            compression_logger.info(f"⚠️ [DISABLED] Email compression disabled via environment variable")
+            return {
+                **email_data,
+                'compression_type': 'disabled',
+                'original_length': original_size,
+                'compressed_length': original_size,
+                'compression_ratio': 1.0
+            }
         
         try:
             # Step 1: Classify email type
@@ -147,28 +160,41 @@ class IntelligentCompressor:
             return self._fallback_compression(email_data, compression_id)
     
     def _classify_email_type(self, email_data: Dict, compression_id: str = None) -> str:
-        """Classify email type for appropriate compression strategy"""
+        """Classify email type for appropriate compression strategy - MUCH MORE CONSERVATIVE"""
         content = f"{email_data.get('subject', '')} {email_data.get('sender', '')} {email_data.get('body', '')}".lower()
         
-        # Financial email indicators
+        # 🔧 EXPANDED financial email indicators - more comprehensive detection
         financial_keywords = [
             'transaction', 'payment', 'debit', 'credit', 'refund', 'invoice',
-            'receipt', 'statement', 'balance', 'transfer', 'bank', 'card'
+            'receipt', 'statement', 'balance', 'transfer', 'bank', 'card',
+            'amount', 'charged', 'paid', 'received', 'credited', 'debited',
+            'order', 'purchase', 'subscription', 'bill', 'due', 'account',
+            'wallet', 'upi', 'net banking', 'paypal', 'paytm', 'phonepe',
+            'gpay', 'amazon pay', 'rupees', 'inr', '₹', 'rs.', 'money',
+            'fund', 'emi', 'loan', 'interest', 'fee', 'charge', 'cost',
+            'price', 'total', 'subtotal', 'tax', 'cashback', 'reward'
         ]
         
-        # Promotional email indicators
+        # 🔧 EXPANDED promotional patterns - but stricter threshold
         promotional_keywords = [
-            'unsubscribe', 'newsletter', 'offer', 'sale', 'discount',
-            'marketing', 'promotion', 'deal', 'limited time'
+            'unsubscribe', 'newsletter', 'marketing', 'promotion', 'advertisement',
+            'limited time', 'exclusive offer', 'deal of the day', 'flash sale',
+            'click here', 'shop now', 'buy now', 'subscribe now', 'join now'
         ]
         
-        # Count keyword occurrences
+        # 🔧 MUCH MORE SENSITIVE financial detection (lowered threshold)
         financial_score = sum(1 for keyword in financial_keywords if keyword in content)
         promotional_score = sum(1 for keyword in promotional_keywords if keyword in content)
         
-        if financial_score >= 2:
+        # Check sender for financial institutions
+        sender = email_data.get('sender', '').lower()
+        financial_senders = ['bank', 'paytm', 'phonepe', 'gpay', 'amazon', 'flipkart', 'swiggy', 'zomato', 'uber', 'ola']
+        sender_is_financial = any(fs in sender for fs in financial_senders)
+        
+        # 🔧 LOWERED threshold: Even 1 financial keyword is enough!
+        if financial_score >= 1 or sender_is_financial:
             return 'financial'
-        elif promotional_score >= 2:
+        elif promotional_score >= 3:  # Raised threshold for promotional
             return 'promotional'
         elif '@' in email_data.get('sender', '') and 'gmail.com' in email_data.get('sender', ''):
             return 'personal'
@@ -177,30 +203,30 @@ class IntelligentCompressor:
     
     def _compress_financial_email(self, email_data: Dict, compression_id: str = None) -> Dict:
         """
-        Compress financial email while preserving ALL important data
+        🔧 FIXED: MINIMAL compression for financial emails - preserve almost everything
         """
         self.compression_stats['financial_preserved'] += 1
         
         # Extract structured financial data FIRST
         structured_data = self._extract_structured_data(email_data)
         
-        # Preserve complete financial content (NO truncation)
+        # Preserve complete financial content (MUCH LARGER LIMIT)
         content = email_data.get('body', '') or email_data.get('snippet', '')
         
-        # Clean up content (remove HTML, normalize whitespace)
-        content = self._clean_content(content)
+        # Clean up content (remove HTML, normalize whitespace) - but preserve structure
+        content = self._clean_content_minimal(content)
         
-        # For financial emails, preserve MORE content (up to 2000 characters)
-        if len(content) > 2000:
-            # Instead of blind truncation, preserve important sections
-            content = self._preserve_important_sections(content, max_length=2000)
+        # 🔧 MASSIVELY INCREASED limit for financial emails (10x more!)
+        if len(content) > 20000:  # Increased from 2000 to 20000 characters
+            # Even then, preserve important sections intelligently
+            content = self._preserve_important_sections(content, max_length=20000)
         
         # Store both structured data and cleaned content
         compressed_data = {
             **email_data,
             'body': content,
             'structured_data': structured_data,
-            'compression_type': 'financial_preserved',
+            'compression_type': 'financial_minimal',  # Changed type name
             'original_length': len(email_data.get('body', '')),
             'compressed_length': len(content),
             'compression_ratio': len(content) / max(len(email_data.get('body', '')), 1)
@@ -210,22 +236,23 @@ class IntelligentCompressor:
     
     def _compress_promotional_email(self, email_data: Dict, compression_id: str = None) -> Dict:
         """
-        Aggressive compression for promotional emails
+        🔧 FIXED: MODERATE compression for promotional emails (much less aggressive)
         """
         self.compression_stats['promotional_compressed'] += 1
         
         content = email_data.get('body', '') or email_data.get('snippet', '')
         original_length = len(content)
         
-        # Remove promotional fluff
-        content = self._remove_promotional_content(content)
+        # Remove promotional fluff (but check for financial content first)
+        if not self._has_financial_content(content):
+            content = self._remove_promotional_content(content)
         
-        # Clean up content
-        content = self._clean_content(content)
+        # Clean up content minimally
+        content = self._clean_content_minimal(content)
         
-        # For promotional emails, more aggressive truncation is acceptable
-        if len(content) > 300:
-            content = content[:300] + "..."
+        # 🔧 MUCH LESS aggressive truncation (5x more content preserved)
+        if len(content) > 1500:  # Increased from 300 to 1500 characters
+            content = self._preserve_important_sections(content, max_length=1500)
         
         # Track space saved
         self.compression_stats['space_saved_bytes'] += original_length - len(content)
@@ -233,7 +260,7 @@ class IntelligentCompressor:
         compressed_data = {
             **email_data,
             'body': content,
-            'compression_type': 'promotional_compressed',
+            'compression_type': 'promotional_moderate',  # Changed type name
             'original_length': original_length,
             'compressed_length': len(content),
             'compression_ratio': len(content) / max(original_length, 1)
@@ -243,21 +270,21 @@ class IntelligentCompressor:
     
     def _compress_personal_email(self, email_data: Dict, compression_id: str = None) -> Dict:
         """
-        Moderate compression for personal emails
+        🔧 FIXED: LIGHT compression for personal emails (much more preserved)
         """
         content = email_data.get('body', '') or email_data.get('snippet', '')
         
-        # Clean up content
-        content = self._clean_content(content)
+        # Clean up content minimally
+        content = self._clean_content_minimal(content)
         
-        # Moderate truncation for personal emails
-        if len(content) > 1000:
-            content = self._preserve_important_sections(content, max_length=1000)
+        # 🔧 INCREASED limit for personal emails (5x more)
+        if len(content) > 5000:  # Increased from 1000 to 5000 characters
+            content = self._preserve_important_sections(content, max_length=5000)
         
         compressed_data = {
             **email_data,
             'body': content,
-            'compression_type': 'personal_moderate',
+            'compression_type': 'personal_light',  # Changed type name
             'original_length': len(email_data.get('body', '')),
             'compressed_length': len(content),
             'compression_ratio': len(content) / max(len(email_data.get('body', '')), 1)
@@ -267,21 +294,21 @@ class IntelligentCompressor:
     
     def _compress_standard_email(self, email_data: Dict, compression_id: str = None) -> Dict:
         """
-        Standard compression for other emails
+        🔧 FIXED: CONSERVATIVE compression for standard emails (much more preserved)
         """
         content = email_data.get('body', '') or email_data.get('snippet', '')
         
-        # Clean up content
-        content = self._clean_content(content)
+        # Clean up content minimally
+        content = self._clean_content_minimal(content)
         
-        # Standard truncation
-        if len(content) > 800:
-            content = self._preserve_important_sections(content, max_length=800)
+        # 🔧 INCREASED limit for standard emails (5x more)
+        if len(content) > 4000:  # Increased from 800 to 4000 characters
+            content = self._preserve_important_sections(content, max_length=4000)
         
         compressed_data = {
             **email_data,
             'body': content,
-            'compression_type': 'standard',
+            'compression_type': 'standard_conservative',  # Changed type name
             'original_length': len(email_data.get('body', '')),
             'compressed_length': len(content),
             'compression_ratio': len(content) / max(len(email_data.get('body', '')), 1)
@@ -329,6 +356,37 @@ class IntelligentCompressor:
         content = re.sub(r'\n\s*\n', '\n', content)
         
         return content.strip()
+    
+    def _clean_content_minimal(self, content: str) -> str:
+        """
+        🔧 NEW: Minimal content cleaning - preserves more structure and information
+        """
+        # Only remove obvious HTML tags but preserve structure
+        content = re.sub(r'<(?:script|style)[^>]*>.*?</(?:script|style)>', '', content, flags=re.DOTALL)
+        content = re.sub(r'<[^>]{1,50}>', '', content)  # Only remove short HTML tags
+        
+        # Very minimal whitespace normalization
+        content = re.sub(r'[ \t]+', ' ', content)  # Only normalize spaces/tabs
+        content = re.sub(r'\n{3,}', '\n\n', content)  # Only remove excessive line breaks
+        
+        return content.strip()
+    
+    def _has_financial_content(self, content: str) -> bool:
+        """
+        🔧 NEW: Check if content contains financial information
+        """
+        content_lower = content.lower()
+        
+        # Check for currency symbols and amounts
+        if re.search(r'[₹$]\s*[\d,]+', content) or re.search(r'(?:rs\.?|rupees?|inr)\s*[\d,]+', content_lower):
+            return True
+        
+        # Check for transaction-related terms
+        financial_indicators = ['transaction', 'payment', 'debit', 'credit', 'charged', 'paid', 'received', 'order']
+        if any(indicator in content_lower for indicator in financial_indicators):
+            return True
+        
+        return False
     
     def _preserve_important_sections(self, content: str, max_length: int) -> str:
         """

@@ -305,9 +305,38 @@ def enhanced_rate_limit_middleware(app):
     return RateLimitMiddleware(app)
 
 
-async def email_processing_context():
-    """Email processing context for background tasks."""
-    return {"status": "ready", "context": "email_processing"}
+class EmailProcessingContext:
+    """Async context manager for email processing resources"""
+    
+    def __init__(self, user_id: str):
+        self.user_id = user_id
+        self.start_time = None
+        self.resources = {}
+    
+    async def __aenter__(self):
+        """Enter the context manager"""
+        from datetime import datetime
+        self.start_time = datetime.now()
+        self.resources = {
+            "user_id": self.user_id,
+            "status": "ready", 
+            "context": "email_processing",
+            "start_time": self.start_time
+        }
+        return self.resources
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Exit the context manager"""
+        if exc_type:
+            # Log any exceptions that occurred
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error in email processing context for user {self.user_id}: {exc_val}")
+        return False
+
+def email_processing_context(user_id: str):
+    """Email processing context manager for background tasks."""
+    return EmailProcessingContext(user_id)
 
 
 def get_health_status() -> Dict[str, Any]:

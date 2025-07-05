@@ -47,7 +47,8 @@ MAX_EMAIL_LIMIT = _settings.max_email_limit
 ENABLE_BATCH_PROCESSING = _settings.enable_batch_processing
 
 # Performance and timeout settings
-EMAIL_PROCESSING_TIMEOUT = 300  # 5 minutes
+# ⏱️ Increase processing timeout to support large 6-month financial scans
+EMAIL_PROCESSING_TIMEOUT = 1800  # 30 minutes
 CONCURRENT_USERS_LIMIT = 50
 STORAGE_WARNING_THRESHOLD = 80  # 80% storage usage warning
 STORAGE_CRITICAL_THRESHOLD = 95  # 95% storage usage critical
@@ -216,29 +217,111 @@ def get_database_for_user(user_id: str) -> str:
     return f"{_settings.mongodb_database}_shard_{shard_index}"
 
 def calculate_email_importance(email_data: dict) -> float:
-    """Calculate email importance score"""
-    score = 0.5  # Base score
+    """🔧 MASSIVELY ENHANCED: Calculate email importance score - PRESERVE MORE EMAILS"""
+    score = 5.0  # High base score - start with assumption that email is important
     
     # Check if it's a financial email
     subject = email_data.get('subject', '').lower()
     body = email_data.get('body', '').lower()
+    sender = email_data.get('sender', '').lower()
+    snippet = email_data.get('snippet', '').lower()
     
-    # Financial emails get higher importance
-    for keyword in FINANCIAL_EMAIL_KEYWORDS:
-        if keyword in subject or keyword in body:
-            score += 0.3
+    # 🔧 MASSIVELY EXPANDED: All transaction-related content gets very high scores
+    transaction_keywords = [
+        # Financial transactions
+        'transaction', 'payment', 'debit', 'credit', 'refund', 'invoice', 'receipt',
+        'statement', 'balance', 'transfer', 'withdrawal', 'deposit', 'charged',
+        'amount', 'rupees', 'inr', '₹', 'rs.', 'money', 'fund', 'bill', 'due',
+        
+        # Shopping & orders
+        'order', 'purchase', 'bought', 'cart', 'checkout', 'item', 'product',
+        'delivery', 'shipped', 'dispatched', 'tracking', 'confirmed', 'booking',
+        'reserved', 'ticket', 'seat', 'confirmation', 'booking reference',
+        
+        # Services & subscriptions
+        'subscription', 'premium', 'plan', 'renewal', 'expired', 'activate',
+        'membership', 'pro version', 'upgrade', 'service', 'appointment',
+        
+        # Investment & trading
+        'investment', 'invest', 'mutual fund', 'sip', 'stock', 'share', 'equity',
+        'trading', 'portfolio', 'dividend', 'redemption', 'units', 'nav',
+        'profit', 'loss', 'capital gains', 'market'
+    ]
+    
+    content = f"{subject} {body} {snippet}"
+    transaction_score = sum(1 for keyword in transaction_keywords if keyword in content)
+    if transaction_score > 0:
+        score += min(transaction_score * 2.0, 8.0)  # Cap at 8 extra points
+    
+    # 🔧 MASSIVELY EXPANDED: Important sender patterns
+    import re
+    important_sender_patterns = [
+        # Banks and financial institutions
+        r'bank|hdfc|icici|sbi|axis|kotak|pnb|bob|canara|union|indian|central',
+        # Payment platforms  
+        r'paytm|phonepe|googlepay|amazonpay|mobikwik|freecharge|bharatpe',
+        # E-commerce platforms
+        r'amazon|flipkart|myntra|ajio|nykaa|bigbasket|grofers|snapdeal',
+        # Food delivery
+        r'swiggy|zomato|ubereats|foodpanda|dominos|pizzahut|kfc|mcdonalds',
+        # Travel & transportation
+        r'makemytrip|goibibo|cleartrip|irctc|redbus|uber|ola|rapido',
+        r'indigo|spicejet|airindia|vistara|goair|airlines?',
+        # Investment platforms
+        r'zerodha|groww|angel.*broking|icicidirect|hdfcsec|kotaksecurities',
+        r'mutual.*fund|aditya.*birla|nippon|axis.*mutual|sbi.*mutual',
+        # Streaming & subscriptions
+        r'netflix|prime|hotstar|spotify|youtube|adobe|microsoft|apple',
+        r'google|dropbox|zoom|slack|notion|canva|figma',
+        # Utilities & services
+        r'airtel|jio|vodafone|bsnl|tata|adani|bescom|electricity|gas|water',
+        r'insurance|policy|lic|bajaj|hdfc.*ergo|icici.*lombard',
+        # Government & official
+        r'irctc|uidai|epfo|income.*tax|gst|passport|driving.*license',
+        r'aadhaar|pan|voter|election|government|official|ministry'
+    ]
+    
+    for pattern in important_sender_patterns:
+        if re.search(pattern, sender):
+            score += 3.0  # High score for important senders
             break
     
-    # Sender importance
-    sender = email_data.get('sender', '').lower()
-    if any(bank_pattern.search(sender) for bank_pattern in BANK_REGEX):
-        score += 0.2
+    # 🔧 ENHANCED: Transaction patterns get very high scores
+    transaction_patterns = [
+        r'[₹\$]\s*[\d,]+',  # Amount patterns
+        r'(?:rs\.?|rupees?|inr)\s*[\d,]+',
+        r'order\s*(?:id|no|number)?\s*:?\s*[a-zA-Z0-9]+',
+        r'transaction\s*(?:id|ref|no)?\s*:?\s*[a-zA-Z0-9]+',
+        r'booking\s*(?:id|ref|no)?\s*:?\s*[a-zA-Z0-9]+',
+        r'ticket\s*(?:no|number)?\s*:?\s*[a-zA-Z0-9]+',
+        r'reference\s*(?:no|number)?\s*:?\s*[a-zA-Z0-9]+',
+        r'order\s+(?:confirmed|placed|delivered|shipped|dispatched)',
+        r'payment\s+(?:successful|completed|received|failed)',
+        r'booking\s+(?:confirmed|cancelled|modified)',
+        r'subscription\s+(?:activated|renewed|expired|cancelled)',
+    ]
     
-    # Promotional emails get lower importance  
-    if any(pattern.search(subject + ' ' + body) for pattern in PROMOTIONAL_EMAIL_PATTERNS):
-        score -= 0.2
+    for pattern in transaction_patterns:
+        if re.search(pattern, content, re.IGNORECASE):
+            score += 2.0  # High score for transaction patterns
+            break
     
-    return max(0.0, min(1.0, score))  # Clamp between 0 and 1
+    # 🔧 MINIMAL: Only penalize very clear promotional content
+    clear_promotional_patterns = [
+        r'unsubscribe.*from.*newsletter',
+        r'marketing.*email|promotional.*email',
+        r'daily.*newsletter|weekly.*newsletter',
+        r'click.*here.*unsubscribe',
+        r'remove.*me.*from.*list'
+    ]
+    
+    for pattern in clear_promotional_patterns:
+        if re.search(pattern, content, re.IGNORECASE):
+            score -= 2.0  # Reduced penalty
+            break
+    
+    # 🔧 ENHANCED: Scale to 0-10 range with high preservation tendency
+    return max(0.5, min(10.0, score))  # Minimum 0.5 to avoid filtering most emails
 
 __all__ = [
     "Settings",

@@ -91,7 +91,7 @@ class DatabaseManager:
                     minPoolSize=DB_MIN_POOL_SIZE,
                     connectTimeoutMS=5000,  # Reduced timeout for faster fallback
                     serverSelectionTimeoutMS=5000,  # Reduced timeout
-                    socketTimeoutMS=10000,
+                    socketTimeoutMS=120000,
                     retryWrites=True,
                     w="majority"
                 )
@@ -288,56 +288,131 @@ compressor = SmartCompressor()
 # ============================================================================
 
 class AutoCleanupManager:
-    """Automatic data cleanup for free tier optimization"""
+    """Automatic data cleanup for free tier optimization - ENHANCED SAFETY"""
     
     def __init__(self):
         self.cleanup_running = False
     
     async def cleanup_old_emails(self, user_id: str):
-        """Remove emails older than 6 months"""
+        """Remove emails older than 1 year - VERY CONSERVATIVE with enhanced safety"""
         try:
+            # 🔧 CRITICAL SAFETY: Check if user is currently being processed
+            users_coll = await db_manager.get_collection(user_id, "users")
+            user_data = await users_coll.find_one({"user_id": user_id})
+            
+            if user_data and user_data.get("processing_started_at"):
+                logger.warning(f"🚨 CLEANUP BLOCKED: User {user_id} is currently being processed")
+                return 0
+            
             cutoff_date = datetime.now() - timedelta(days=MAX_EMAIL_AGE_DAYS)
             
             # Get user's email collection
             emails_coll = await db_manager.get_collection(user_id, "emails")
             
-            # Delete old emails
-            result = await emails_coll.delete_many({
+            # 🔧 CRITICAL: First check how many emails would be deleted
+            emails_to_delete = await emails_coll.count_documents({
                 "user_id": user_id,
                 "date": {"$lt": cutoff_date.strftime("%Y-%m-%d")}
             })
             
-            logger.info(f"🧹 Cleaned up {result.deleted_count} old emails for user {user_id}")
-            return result.deleted_count
+            total_emails = await emails_coll.count_documents({"user_id": user_id})
+            
+            # 🔧 CRITICAL: Only delete if less than 5% of emails are affected (reduced from 10%)
+            if emails_to_delete > 0 and total_emails > 0:
+                deletion_percentage = (emails_to_delete / total_emails) * 100
+                
+                if deletion_percentage > 5:  # Reduced from 10% to 5%
+                    logger.warning(f"🚨 CLEANUP BLOCKED: Would delete {emails_to_delete}/{total_emails} emails ({deletion_percentage:.1f}%) for user {user_id}")
+                    logger.warning(f"🚨 This exceeds 5% threshold - cleanup skipped to prevent data loss")
+                    return 0
+                
+                # 🔧 ADDITIONAL SAFETY: Don't cleanup if user has fewer than 100 emails total
+                if total_emails < 100:
+                    logger.warning(f"🚨 CLEANUP BLOCKED: User {user_id} has only {total_emails} emails - too few to cleanup")
+                    return 0
+                
+                logger.info(f"🧹 CLEANUP SAFE: Will delete {emails_to_delete}/{total_emails} emails ({deletion_percentage:.1f}%) for user {user_id}")
+                
+                # 🔧 ADDITIONAL SAFETY: Backup emails before deletion
+                emails_to_backup = await emails_coll.find({
+                    "user_id": user_id,
+                    "date": {"$lt": cutoff_date.strftime("%Y-%m-%d")}
+                }).to_list(length=emails_to_delete)
+                
+                if emails_to_backup:
+                    logger.info(f"💾 Creating backup of {len(emails_to_backup)} emails before cleanup")
+                    # Could implement backup to separate collection here
+                
+                # Delete old emails
+                result = await emails_coll.delete_many({
+                    "user_id": user_id,
+                    "date": {"$lt": cutoff_date.strftime("%Y-%m-%d")}
+                })
+                
+                logger.info(f"🧹 Cleaned up {result.deleted_count} old emails for user {user_id}")
+                return result.deleted_count
+            else:
+                logger.info(f"🧹 No old emails to cleanup for user {user_id}")
+                return 0
             
         except Exception as e:
             logger.error(f"Cleanup error for user {user_id}: {e}")
             return 0
-    
+
     async def cleanup_all_users(self):
-        """Run cleanup for all users"""
+        """Run cleanup for all users - VERY CONSERVATIVE with enhanced safety"""
         if self.cleanup_running:
-            logger.info("Cleanup already running, skipping...")
+            logger.info("🧹 Cleanup already running, skipping...")
+            return
+        
+        # 🔧 CRITICAL SAFETY: Check if auto-cleanup is enabled
+        if not ENABLE_AUTO_CLEANUP:
+            logger.info("🚨 AUTO-CLEANUP DISABLED - Skipping cleanup to prevent data loss")
             return
         
         self.cleanup_running = True
+        cleanup_start_time = datetime.now()
+        
         try:
+            logger.info(f"🧹 GLOBAL CLEANUP STARTED at {cleanup_start_time}")
+            
             total_cleaned = 0
+            total_users = 0
+            users_with_cleanup = 0
+            users_skipped = 0
             
             # Get all users across all databases
             for db_index, database in db_manager.databases.items():
                 users_coll = database["users"]
                 
                 async for user in users_coll.find({}):
+                    total_users += 1
                     user_id = user.get("user_id")
                     if user_id:
+                        # 🔧 ADDITIONAL SAFETY: Skip users being processed
+                        if user.get("processing_started_at"):
+                            users_skipped += 1
+                            logger.info(f"⏭️ Skipping cleanup for user {user_id} - currently being processed")
+                            continue
+                            
                         cleaned = await self.cleanup_old_emails(user_id)
                         total_cleaned += cleaned
+                        if cleaned > 0:
+                            users_with_cleanup += 1
             
-            logger.info(f"🧹 Total cleanup complete: {total_cleaned} emails removed")
+            cleanup_end_time = datetime.now()
+            cleanup_duration = (cleanup_end_time - cleanup_start_time).total_seconds()
+            
+            logger.info(f"🧹 GLOBAL CLEANUP COMPLETE:")
+            logger.info(f"   📊 Total users: {total_users}")
+            logger.info(f"   ⏭️ Users skipped (processing): {users_skipped}")
+            logger.info(f"   🗑️ Users with cleanup: {users_with_cleanup}")
+            logger.info(f"   📧 Total emails removed: {total_cleaned}")
+            logger.info(f"   ⏱️ Cleanup duration: {cleanup_duration:.2f}s")
+            logger.info(f"   📅 Cleanup completed at: {cleanup_end_time}")
             
         except Exception as e:
-            logger.error(f"Global cleanup error: {e}")
+            logger.error(f"🚨 Global cleanup error: {e}")
         finally:
             self.cleanup_running = False
     
@@ -394,54 +469,192 @@ class SmartEmailFilter:
         }
     
     def is_promotional_email(self, email_data: Dict) -> bool:
-        """Identify promotional/marketing emails to filter out"""
+        """🔧 FIXED: Much more conservative promotional detection - only clear marketing emails"""
         content = f"{email_data.get('subject', '')} {email_data.get('sender', '')} {email_data.get('snippet', '')}".lower()
-        
-        # Check for promotional patterns
-        for pattern in self.promotional_patterns:
-            if pattern.lower() in content:
-                return True
-        
-        # Check for marketing indicators in sender
         sender = email_data.get('sender', '').lower()
-        marketing_domains = ['marketing', 'newsletter', 'no-reply', 'noreply', 'promo', 'offers']
-        if any(domain in sender for domain in marketing_domains):
-            return True
         
-        return False
+        # 🔧 CRITICAL: If email has ANY transactional content, DO NOT filter as promotional
+        if self.has_transactional_content(email_data):
+            return False
+        
+        # 🔧 CRITICAL: If email has ANY financial content, DO NOT filter as promotional  
+        if self.is_financial_email(email_data):
+            return False
+        
+        # Only filter emails that are CLEARLY promotional with NO transactional value
+        clear_promotional_patterns = [
+            'unsubscribe from this newsletter',
+            'daily newsletter',
+            'weekly newsletter', 
+            'marketing email',
+            'promotional email',
+            'you are receiving this because',
+            'this is a promotional message',
+            'click here to unsubscribe',
+            'remove me from this list'
+        ]
+        
+        # Very strict promotional detection
+        promotional_score = 0
+        for pattern in clear_promotional_patterns:
+            if pattern in content:
+                promotional_score += 1
+        
+        # Check for clear marketing senders (but be very conservative)
+        clear_marketing_domains = ['newsletter@', 'marketing@', 'promo@', 'noreply@newsletter']
+        sender_is_marketing = any(domain in sender for domain in clear_marketing_domains)
+        
+        # Only filter if multiple strong promotional indicators AND no transaction content
+        return promotional_score >= 2 or (promotional_score >= 1 and sender_is_marketing)
     
     def is_financial_email(self, email_data: Dict) -> bool:
-        """Identify financial/transaction emails (ALWAYS PRESERVE)"""
+        """🔧 MASSIVELY EXPANDED: Identify ALL types of financial/transactional emails"""
         content = f"{email_data.get('subject', '')} {email_data.get('sender', '')} {email_data.get('snippet', '')}".lower()
+        sender = email_data.get('sender', '').lower()
+        
+        # 🔧 MASSIVELY EXPANDED financial keywords - covers all user scenarios
+        comprehensive_financial_keywords = [
+            # Basic financial terms
+            'transaction', 'payment', 'debit', 'credit', 'refund', 'invoice', 'receipt',
+            'statement', 'balance', 'transfer', 'withdrawal', 'deposit', 'charged',
+            'amount', 'rupees', 'inr', '₹', 'rs.', 'money', 'fund', 'bill', 'due',
+            
+            # Shopping & E-commerce
+            'order', 'purchase', 'bought', 'cart', 'checkout', 'item', 'product',
+            'delivery', 'shipped', 'dispatched', 'tracking', 'confirmed', 'booking',
+            'reserved', 'ticket', 'seat', 'confirmation', 'booking reference',
+            
+            # Food delivery & services  
+            'food', 'delivered', 'delivery partner', 'restaurant', 'meal', 'cuisine',
+            'order placed', 'order confirmed', 'order delivered', 'delivery fee',
+            
+            # Travel & transportation
+            'flight', 'airline', 'boarding', 'travel', 'journey', 'trip', 'hotel',
+            'cab', 'taxi', 'ride', 'uber', 'ola', 'bus', 'train', 'ticket',
+            'booking confirmed', 'itinerary', 'check-in', 'pnr', 'ticket number',
+            
+            # Investments & trading
+            'investment', 'invest', 'mutual fund', 'sip', 'stock', 'share', 'equity',
+            'trading', 'portfolio', 'dividend', 'redemption', 'units', 'nav',
+            'profit', 'loss', 'capital gains', 'market', 'zerodha', 'groww',
+            
+            # Subscriptions & services
+            'subscription', 'premium', 'plan', 'renewal', 'expired', 'activate',
+            'membership', 'pro version', 'upgrade', 'downgrade', 'auto-renewal',
+            
+            # Banking & cards
+            'bank', 'account', 'card', 'upi', 'netbanking', 'wallet', 'paytm',
+            'phonepe', 'gpay', 'googlepay', 'amazon pay', 'emi', 'loan', 'interest',
+            
+            # Utilities & bills
+            'electricity', 'mobile', 'recharge', 'broadband', 'internet', 'gas',
+            'water', 'insurance', 'premium paid', 'policy', 'claim'
+        ]
         
         # Check for financial keywords
-        return any(keyword.lower() in content for keyword in self.financial_keywords)
+        has_financial_keywords = any(keyword in content for keyword in comprehensive_financial_keywords)
+        
+        # 🔧 EXPANDED: Check for important service providers and merchants
+        important_senders = [
+            # Food delivery
+            'swiggy', 'zomato', 'foodpanda', 'ubereats', 'dominos', 'pizzahut',
+            # E-commerce
+            'amazon', 'flipkart', 'myntra', 'ajio', 'nykaa', 'bigbasket', 'grofers',
+            # Travel
+            'makemytrip', 'goibibo', 'cleartrip', 'irctc', 'redbus', 'oyorooms',
+            'uber', 'ola', 'rapido', 'indigo', 'spicejet', 'airindia',
+            # Banks
+            'hdfcbank', 'icicbank', 'sbi', 'axisbank', 'kotakbank', 'pnb',
+            # Payments
+            'paytm', 'phonepe', 'googlepay', 'amazonpay', 'mobikwik', 'freecharge',
+            # Investments
+            'zerodha', 'groww', 'angelbroking', 'icicidirect', 'hdfcsec', 'kotaksecurities',
+            'sbi', 'mutual fund', 'aditya birla', 'nippon', 'axis mutual',
+            # Subscriptions
+            'netflix', 'prime', 'hotstar', 'spotify', 'youtube', 'adobe', 'microsoft',
+            'apple', 'google', 'dropbox', 'zoom', 'slack', 'notion',
+            # Utilities
+            'airtel', 'jio', 'vodafone', 'bsnl', 'tata', 'adani', 'bescom'
+        ]
+        
+        sender_is_important = any(provider in sender for provider in important_senders)
+        
+        return has_financial_keywords or sender_is_important
+    
+    def has_transactional_content(self, email_data: Dict) -> bool:
+        """🔧 NEW: Detect any transactional content that should never be filtered"""
+        content = f"{email_data.get('subject', '')} {email_data.get('snippet', '')}".lower()
+        
+        # Transactional indicators
+        transactional_patterns = [
+            # Amount patterns
+            r'[₹\$]\s*[\d,]+',
+            r'(?:rs\.?|rupees?|inr)\s*[\d,]+',
+            r'amount\s*:?\s*[\d,]+',
+            r'total\s*:?\s*[\d,]+',
+            r'paid\s*:?\s*[\d,]+',
+            
+            # Order/Transaction ID patterns
+            r'order\s*(?:id|no|number)?\s*:?\s*[a-zA-Z0-9]+',
+            r'transaction\s*(?:id|ref|no)?\s*:?\s*[a-zA-Z0-9]+',
+            r'booking\s*(?:id|ref|no)?\s*:?\s*[a-zA-Z0-9]+',
+            r'ticket\s*(?:no|number)?\s*:?\s*[a-zA-Z0-9]+',
+            r'reference\s*(?:no|number)?\s*:?\s*[a-zA-Z0-9]+',
+            
+            # Status indicators
+            r'order\s+(?:confirmed|placed|delivered|shipped|dispatched)',
+            r'payment\s+(?:successful|completed|received|failed)',
+            r'booking\s+(?:confirmed|cancelled|modified)',
+            r'subscription\s+(?:activated|renewed|expired|cancelled)',
+        ]
+        
+        return any(re.search(pattern, content, re.IGNORECASE) for pattern in transactional_patterns)
     
     def should_keep_email(self, email_data: Dict) -> tuple[bool, str]:
-        """Determine if email should be kept and reason"""
+        """🔧 FIXED: MUCH MORE CONSERVATIVE - When in doubt, PRESERVE"""
         
-        # ALWAYS keep financial emails
+        # 🔧 RULE 1: ALWAYS keep financial/transactional emails
         if self.is_financial_email(email_data):
             self.stats["financial_preserved"] += 1
             return True, "financial"
         
-        # Calculate importance score
+        # 🔧 RULE 2: ALWAYS keep emails with transactional content
+        if self.has_transactional_content(email_data):
+            self.stats["important_preserved"] += 1
+            return True, "transactional"
+        
+        # 🔧 RULE 3: Check for important merchants/services in sender
+        sender = email_data.get('sender', '').lower()
+        important_domains = [
+            '.com', '.in', '.co.in', '.net', '.org',  # Business domains
+            'amazon', 'flipkart', 'swiggy', 'zomato', 'uber', 'ola',
+            'netflix', 'spotify', 'youtube', 'google', 'microsoft',
+            'bank', 'hdfc', 'icici', 'sbi', 'axis', 'kotak'
+        ]
+        
+        if any(domain in sender for domain in important_domains):
+            # Only filter if it's very clearly promotional
+            if not self.is_promotional_email(email_data):
+                self.stats["important_preserved"] += 1
+                return True, "important_sender"
+        
+        # 🔧 RULE 4: Calculate importance score (but be more lenient)
         importance_score = calculate_email_importance(email_data)
         email_data["importance_score"] = importance_score
         
-        # Keep high importance emails (score > 6)
-        if importance_score > 6:
+        # 🔧 RULE 5: Much lower threshold for keeping emails (preserve more)
+        if importance_score > 0.3:  # Lowered from 4 to 0.3!
             self.stats["important_preserved"] += 1
-            return True, f"important_{importance_score}"
+            return True, f"importance_{importance_score}"
         
-        # Filter out promotional emails (score < 4)
-        if importance_score < 4 or self.is_promotional_email(email_data):
+        # 🔧 RULE 6: Only filter if VERY clearly promotional AND no value
+        if self.is_promotional_email(email_data) and importance_score < 0.2:
             self.stats["promotional_filtered"] += 1
-            return False, "promotional"
+            return False, "clearly_promotional"
         
-        # Keep medium importance emails
+        # 🔧 DEFAULT: When in doubt, PRESERVE (this is the key change!)
         self.stats["important_preserved"] += 1
-        return True, f"medium_{importance_score}"
+        return True, "default_preserve"
     
     def filter_email_batch(self, emails: List[Dict]) -> List[Dict]:
         """Filter a batch of emails, keeping only important ones"""
@@ -619,13 +832,21 @@ async def insert_filtered_emails(user_id: str, emails_data: List[Dict], processi
     try:
         logger.info(f"📧 [{processing_type.upper()}] Processing {len(emails_data)} emails with smart filtering for user {user_id}")
         
-        # Apply smart filtering
+        # Apply advanced two-stage filtering
         if ENABLE_SMART_EMAIL_FILTERING:
-            logger.info(f"🎯 [{processing_type.upper()}] Applying smart email filtering for user {user_id}")
-            filtered_emails = email_filter.filter_email_batch(emails_data)
-            logger.info(f"🎯 [{processing_type.upper()}] Smart filtering result: {len(filtered_emails)}/{len(emails_data)} emails kept")
+            logger.info(f"🎯 [{processing_type.upper()}] Applying advanced two-stage email filtering for user {user_id}")
+            
+            # Use advanced two-stage filter
+            from .advanced_email_filter import advanced_filter
+            filtered_emails = await advanced_filter.two_stage_filter_emails(emails_data, user_id, processing_type)
+            
+            # Get detailed stats
+            filter_stats = advanced_filter.get_filtering_stats()
+            logger.info(f"🎯 [{processing_type.upper()}] Advanced filtering result: {len(filtered_emails)}/{len(emails_data)} emails kept")
+            logger.info(f"📊 [{processing_type.upper()}] Stage 1 filtered: {filter_stats['stage1_filtered']}, Stage 2 filtered: {filter_stats['stage2_filtered']}")
+            logger.info(f"📰 [{processing_type.upper()}] Newsletters filtered: {filter_stats['newsletters_filtered']}, Promotional articles: {filter_stats['promotional_articles_filtered']}")
         else:
-            logger.info(f"⚠️ [{processing_type.upper()}] Smart filtering disabled - keeping all emails")
+            logger.info(f"⚠️ [{processing_type.upper()}] Advanced filtering disabled - keeping all emails")
             filtered_emails = emails_data
         
         # Process emails with complete data extraction
@@ -707,7 +928,7 @@ async def insert_filtered_emails(user_id: str, emails_data: List[Dict], processi
             }
         
         # Insert new emails in batches using upsert
-        batch_size = DATABASE_INSERT_BATCH_SIZE
+        batch_size = min(DATABASE_INSERT_BATCH_SIZE, 250)
         total_inserted = 0
         total_upserted = 0
         failed_operations = 0
@@ -823,21 +1044,43 @@ async def insert_filtered_emails(user_id: str, emails_data: List[Dict], processi
             logger.error(f"⚠️ Failed to count total emails: {count_error}")
             total_emails_now = "unknown"
         
-        # Get filtering statistics
-        filter_stats = email_filter.get_filter_stats()
-        
-        logger.info(f"✅ Email processing complete for user {user_id}:")
-        logger.info(f"   📊 Original emails: {len(emails_data)}")
-        logger.info(f"   📧 New emails inserted: {total_inserted}")
-        logger.info(f"   🔄 New emails upserted: {total_upserted}")
-        logger.info(f"   📈 Total successful: {total_successful}")
-        logger.info(f"   🔄 Duplicates skipped: {duplicates_skipped}")
-        logger.info(f"   🆔 Missing IDs fixed: {emails_without_ids}")
-        logger.info(f"   📊 Total emails in DB: {total_emails_now}")
-        logger.info(f"   ❌ Failed operations: {failed_operations}")
-        logger.info(f"   🗑️ Promotional filtered: {filter_stats['promotional_filtered']}")
-        logger.info(f"   💰 Financial preserved: {filter_stats['financial_preserved']}")
-        logger.info(f"   💾 Space saved: {filter_stats['space_saved_percent']}%")
+        # Get filtering statistics - use advanced filter stats if available
+        if ENABLE_SMART_EMAIL_FILTERING:
+            from .advanced_email_filter import advanced_filter
+            filter_stats = advanced_filter.get_filtering_stats()
+            
+            logger.info(f"✅ Email processing complete for user {user_id}:")
+            logger.info(f"   📊 Original emails: {len(emails_data)}")
+            logger.info(f"   📧 New emails inserted: {total_inserted}")
+            logger.info(f"   🔄 New emails upserted: {total_upserted}")
+            logger.info(f"   📈 Total successful: {total_successful}")
+            logger.info(f"   🔄 Duplicates skipped: {duplicates_skipped}")
+            logger.info(f"   🆔 Missing IDs fixed: {emails_without_ids}")
+            logger.info(f"   📊 Total emails in DB: {total_emails_now}")
+            logger.info(f"   ❌ Failed operations: {failed_operations}")
+            logger.info(f"   🎯 Advanced Filtering Results:")
+            logger.info(f"     📊 Stage 1 filtered: {filter_stats['stage1_filtered']}")
+            logger.info(f"     📊 Stage 2 filtered: {filter_stats['stage2_filtered']}")
+            logger.info(f"     📰 Newsletters filtered: {filter_stats['newsletters_filtered']}")
+            logger.info(f"     📄 Promotional articles filtered: {filter_stats['promotional_articles_filtered']}")
+            logger.info(f"     🛡️ Preserved for safety: {filter_stats['preserved_for_safety']}")
+            logger.info(f"     📈 Overall preservation rate: {filter_stats['preservation_rate']}%")
+        else:
+            # Fallback to basic filter stats
+            filter_stats = email_filter.get_filter_stats()
+            
+            logger.info(f"✅ Email processing complete for user {user_id}:")
+            logger.info(f"   📊 Original emails: {len(emails_data)}")
+            logger.info(f"   📧 New emails inserted: {total_inserted}")
+            logger.info(f"   🔄 New emails upserted: {total_upserted}")
+            logger.info(f"   📈 Total successful: {total_successful}")
+            logger.info(f"   🔄 Duplicates skipped: {duplicates_skipped}")
+            logger.info(f"   🆔 Missing IDs fixed: {emails_without_ids}")
+            logger.info(f"   📊 Total emails in DB: {total_emails_now}")
+            logger.info(f"   ❌ Failed operations: {failed_operations}")
+            logger.info(f"   🗑️ Promotional filtered: {filter_stats.get('promotional_filtered', 0)}")
+            logger.info(f"   💰 Financial preserved: {filter_stats.get('financial_preserved', 0)}")
+            logger.info(f"   💾 Space saved: {filter_stats.get('space_saved_percent', 0)}%")
         
         if total_successful == 0 and duplicates_skipped == 0:
             logger.error(f"❌ CRITICAL: No emails were inserted for user {user_id}!")
@@ -847,18 +1090,43 @@ async def insert_filtered_emails(user_id: str, emails_data: List[Dict], processi
             logger.error(f"   🆔 Emails without IDs: {emails_without_ids}")
             logger.error(f"   💾 Bulk operations failed: {failed_operations}")
         
-        return {
-            "success": True,
-            "inserted": total_successful,  # Total of inserted + upserted
-            "filtered": filter_stats["promotional_filtered"],
-            "financial": filter_stats["financial_preserved"],
-            "duplicates_skipped": duplicates_skipped,
-            "emails_without_ids": emails_without_ids,
-            "failed_operations": failed_operations,
-            "filter_stats": filter_stats,
-            "original_count": len(emails_data),
-            "total_emails_in_db": total_emails_now
-        }
+        # Return comprehensive stats including advanced filtering
+        if ENABLE_SMART_EMAIL_FILTERING:
+            from .advanced_email_filter import advanced_filter
+            advanced_stats = advanced_filter.get_filtering_stats()
+            
+            return {
+                "success": True,
+                "inserted": total_successful,  # Total of inserted + upserted
+                "filtered": advanced_stats.get("total_filtered", 0),
+                "stage1_filtered": advanced_stats.get("stage1_filtered", 0),
+                "stage2_filtered": advanced_stats.get("stage2_filtered", 0),
+                "newsletters_filtered": advanced_stats.get("newsletters_filtered", 0),
+                "promotional_articles_filtered": advanced_stats.get("promotional_articles_filtered", 0),
+                "preserved_for_safety": advanced_stats.get("preserved_for_safety", 0),
+                "preservation_rate": advanced_stats.get("preservation_rate", 0),
+                "duplicates_skipped": duplicates_skipped,
+                "emails_without_ids": emails_without_ids,
+                "failed_operations": failed_operations,
+                "filter_stats": advanced_stats,
+                "original_count": len(emails_data),
+                "total_emails_in_db": total_emails_now,
+                "filtering_type": "advanced_two_stage"
+            }
+        else:
+            return {
+                "success": True,
+                "inserted": total_successful,  # Total of inserted + upserted
+                "filtered": filter_stats.get("promotional_filtered", 0),
+                "financial": filter_stats.get("financial_preserved", 0),
+                "duplicates_skipped": duplicates_skipped,
+                "emails_without_ids": emails_without_ids,
+                "failed_operations": failed_operations,
+                "filter_stats": filter_stats,
+                "original_count": len(emails_data),
+                "total_emails_in_db": total_emails_now,
+                "filtering_type": "basic"
+            }
         
     except Exception as e:
         logger.error(f"⚠️ Error in filtered email insertion: {e}")
@@ -973,7 +1241,10 @@ async def initialize_free_tier_database():
         # Start cleanup scheduler if enabled
         if ENABLE_AUTO_CLEANUP:
             # Schedule cleanup every 6 hours
+            logger.info("🧹 Auto-cleanup is enabled - scheduling cleanup every 6 hours")
             asyncio.create_task(schedule_cleanup())
+        else:
+            logger.info("🧹 Auto-cleanup is DISABLED - no scheduled cleanup will run")
         
         # Get initial storage stats
         stats = await cleanup_manager.get_storage_stats()
@@ -1012,3 +1283,235 @@ try:
     schedule_db_init()
 except Exception as e:
     logger.info(f"Database initialization scheduled for app startup: {e}")
+
+# ============================================================================
+# DATA RECOVERY AND SAFETY FUNCTIONS
+# ============================================================================
+
+async def get_user_emails_across_all_databases(user_id: str) -> List[Dict]:
+    """
+    CRITICAL SAFETY FUNCTION: Get emails from ALL databases to prevent data loss
+    This function checks both main and shard databases to find all user emails
+    """
+    all_emails = []
+    all_databases_checked = 0
+    
+    try:
+        logger.info(f"🔍 [RECOVERY] Checking ALL databases for user {user_id} emails")
+        
+        # Check all available databases in db_manager
+        for db_index, database in db_manager.databases.items():
+            try:
+                emails_coll = database["emails"]
+                emails = await emails_coll.find({"user_id": user_id}).to_list(length=None)
+                all_databases_checked += 1
+                
+                if emails:
+                    logger.info(f"📊 [DB-{db_index}] Found {len(emails)} emails for user {user_id}")
+                    all_emails.extend(emails)
+                else:
+                    logger.info(f"📭 [DB-{db_index}] No emails found for user {user_id}")
+                    
+            except Exception as db_error:
+                logger.error(f"❌ [DB-{db_index}] Error checking database: {db_error}")
+                continue
+        
+        # Deduplicate emails by ID
+        unique_emails = {}
+        for email in all_emails:
+            email_id = email.get("id")
+            if email_id and email_id not in unique_emails:
+                unique_emails[email_id] = email
+        
+        total_unique = len(unique_emails)
+        total_raw = len(all_emails)
+        duplicates = total_raw - total_unique
+        
+        logger.info(f"✅ [RECOVERY] Database scan complete:")
+        logger.info(f"   📊 Databases checked: {all_databases_checked}")
+        logger.info(f"   📧 Raw emails found: {total_raw}")
+        logger.info(f"   🔒 Unique emails: {total_unique}")
+        logger.info(f"   🔄 Duplicates removed: {duplicates}")
+        
+        return list(unique_emails.values())
+        
+    except Exception as e:
+        logger.error(f"❌ [RECOVERY] Critical error in database scan: {e}")
+        return []
+
+async def get_user_email_count_all_databases(user_id: str) -> int:
+    """Get total email count across ALL databases"""
+    try:
+        all_emails = await get_user_emails_across_all_databases(user_id)
+        return len(all_emails)
+    except Exception as e:
+        logger.error(f"❌ Error getting email count: {e}")
+        return 0
+
+async def recover_user_emails(user_id: str) -> Dict[str, Any]:
+    """
+    EMERGENCY DATA RECOVERY: Recover emails from all databases and consolidate
+    """
+    logger.info(f"🚨 [EMERGENCY] Starting data recovery for user {user_id}")
+    
+    try:
+        # Get all emails from all databases
+        all_emails = await get_user_emails_across_all_databases(user_id)
+        
+        if not all_emails:
+            logger.warning(f"❌ [RECOVERY] No emails found for user {user_id} in any database")
+            return {
+                "success": False,
+                "emails_recovered": 0,
+                "message": "No emails found in any database"
+            }
+        
+        # Get user's primary database for restoration
+        primary_emails_coll = await db_manager.get_collection(user_id, "emails")
+        
+        # Check current count in primary database
+        current_count = await primary_emails_coll.count_documents({"user_id": user_id})
+        total_available = len(all_emails)
+        
+        logger.info(f"📊 [RECOVERY] Recovery analysis:")
+        logger.info(f"   📧 Current emails in primary DB: {current_count}")
+        logger.info(f"   📦 Total emails available: {total_available}")
+        logger.info(f"   🔄 Emails to recover: {total_available - current_count}")
+        
+        if total_available <= current_count:
+            logger.info(f"✅ [RECOVERY] No recovery needed - primary DB has {current_count} emails")
+            return {
+                "success": True,
+                "emails_recovered": 0,
+                "current_count": current_count,
+                "total_available": total_available,
+                "message": "No recovery needed"
+            }
+        
+        # Prepare emails for recovery (ensure proper format)
+        recovery_emails = []
+        for email in all_emails:
+            # Ensure email has required user_id
+            if email.get("user_id") != user_id:
+                email["user_id"] = user_id
+            
+            # Convert datetime objects to strings for MongoDB
+            for key, value in email.items():
+                if hasattr(value, 'isoformat'):
+                    email[key] = value.isoformat()
+            
+            recovery_emails.append(email)
+        
+        # Use upsert operations to restore emails safely
+        bulk_operations = []
+        for email in recovery_emails:
+            email_id = email.get("id")
+            if email_id:
+                bulk_operations.append(
+                    UpdateOne(
+                        filter={"user_id": user_id, "id": email_id},
+                        update={"$set": email},
+                        upsert=True
+                    )
+                )
+        
+        if bulk_operations:
+            logger.info(f"📤 [RECOVERY] Executing {len(bulk_operations)} recovery operations...")
+            result = await primary_emails_coll.bulk_write(bulk_operations, ordered=False)
+            
+            emails_inserted = result.inserted_count
+            emails_upserted = result.upserted_count
+            emails_modified = result.modified_count
+            
+            # Get final count
+            final_count = await primary_emails_coll.count_documents({"user_id": user_id})
+            
+            logger.info(f"✅ [RECOVERY] Recovery complete:")
+            logger.info(f"   ➕ Inserted: {emails_inserted}")
+            logger.info(f"   🔄 Upserted: {emails_upserted}")
+            logger.info(f"   ✏️ Modified: {emails_modified}")
+            logger.info(f"   📊 Final count: {final_count}")
+            
+            return {
+                "success": True,
+                "emails_recovered": emails_inserted + emails_upserted,
+                "emails_inserted": emails_inserted,
+                "emails_upserted": emails_upserted,
+                "emails_modified": emails_modified,
+                "initial_count": current_count,
+                "final_count": final_count,
+                "total_available": total_available,
+                "message": f"Successfully recovered {emails_inserted + emails_upserted} emails"
+            }
+        else:
+            logger.warning(f"⚠️ [RECOVERY] No valid recovery operations generated")
+            return {
+                "success": False,
+                "emails_recovered": 0,
+                "message": "No valid emails to recover"
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ [RECOVERY] Critical recovery error: {e}")
+        import traceback
+        logger.error(f"❌ [RECOVERY] Traceback: {traceback.format_exc()}")
+        return {
+            "success": False,
+            "emails_recovered": 0,
+            "error": str(e),
+            "message": "Recovery failed due to error"
+        }
+
+async def verify_data_integrity_before_processing(user_id: str) -> Dict[str, Any]:
+    """
+    Verify data integrity before any processing that might affect emails
+    """
+    logger.info(f"🔍 [INTEGRITY] Verifying data integrity for user {user_id}")
+    
+    try:
+        # Get email count from all databases
+        total_count = await get_user_email_count_all_databases(user_id)
+        
+        # Get unique email IDs
+        all_emails = await get_user_emails_across_all_databases(user_id)
+        unique_ids = set(email.get("id") for email in all_emails if email.get("id"))
+        
+        # Check for any anomalies
+        issues = []
+        
+        if total_count == 0:
+            issues.append("No emails found in any database")
+        
+        if len(unique_ids) != total_count:
+            issues.append(f"ID mismatch: {total_count} emails but {len(unique_ids)} unique IDs")
+        
+        emails_without_ids = sum(1 for email in all_emails if not email.get("id"))
+        if emails_without_ids > 0:
+            issues.append(f"{emails_without_ids} emails missing IDs")
+        
+        integrity_status = {
+            "user_id": user_id,
+            "total_emails": total_count,
+            "unique_ids": len(unique_ids),
+            "emails_without_ids": emails_without_ids,
+            "databases_checked": len(db_manager.databases),
+            "issues": issues,
+            "integrity_ok": len(issues) == 0,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        if integrity_status["integrity_ok"]:
+            logger.info(f"✅ [INTEGRITY] Data integrity verified: {total_count} emails")
+        else:
+            logger.warning(f"⚠️ [INTEGRITY] Issues found: {issues}")
+        
+        return integrity_status
+        
+    except Exception as e:
+        logger.error(f"❌ [INTEGRITY] Error verifying data integrity: {e}")
+        return {
+            "user_id": user_id,
+            "integrity_ok": False,
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }

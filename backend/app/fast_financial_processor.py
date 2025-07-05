@@ -292,35 +292,29 @@ class EnhancedTransactionExtractor:
         }
     
     def is_financial_email(self, email_data: Dict) -> bool:
-        """Check if email is financial"""
-        content = f"{email_data.get('subject', '')} {email_data.get('snippet', '')} {email_data.get('body', '')}"
-        content_lower = content.lower()
+        """
+        Enhanced financial email detection with context awareness
+        Uses the new EnhancedFinancialDetector to avoid false positives from job postings
+        """
+        from .enhanced_financial_detector import is_actual_financial_transaction
         
-        # Check for currency patterns
-        for pattern in self.currency_patterns:
-            if re.search(pattern, content):
-                return True
+        # Use the enhanced detector that can distinguish between
+        # actual transactions and job postings/newsletters
+        is_financial = is_actual_financial_transaction(email_data)
         
-        # Check for financial keywords
-        for keyword in self.financial_keywords:
-            if keyword.lower() in content_lower:
-                return True
+        if not is_financial:
+            # Get the exclusion reason for logging
+            from .enhanced_financial_detector import get_financial_exclusion_reason
+            exclusion_reason = get_financial_exclusion_reason(email_data)
+            sender = email_data.get('sender', 'unknown')
+            subject = email_data.get('subject', 'unknown')
+            
+            logger.debug(f"Email excluded from financial processing:")
+            logger.debug(f"  Sender: {sender}")
+            logger.debug(f"  Subject: {subject}")
+            logger.debug(f"  Reason: {exclusion_reason}")
         
-        # Check for financial senders
-        sender = email_data.get('sender', '').lower()
-        financial_domains = [
-            # Banks
-            'hdfcbank', 'icici', 'sbi', 'paytm', 'phonepe', 'amazon', 'uber', 'swiggy', 'zomato',
-            # Subscription services
-            'netflix', 'spotify', 'google', 'microsoft', 'adobe', 'apple', 'disney', 'hotstar',
-            'openai', 'anthropic', 'midjourney', 'canva', 'dropbox', 'icloud', 'playstation', 'xbox',
-            'cult', 'healthify', 'kindle', 'times', 'rentomojo'
-        ]
-        for domain in financial_domains:
-            if domain in sender:
-                return True
-        
-        return False
+        return is_financial
     
     def _detect_subscription(self, content: str, sender: str) -> Dict[str, Any]:
         """
@@ -457,22 +451,59 @@ class EnhancedTransactionExtractor:
         return False
     
     def extract_transaction(self, email_data: Dict, user_id: str) -> Optional[Dict]:
-        """Extract comprehensive transaction data from email"""
+        """Extract comprehensive transaction data from email - FIXED: No double-checking"""
         try:
+            # ✅ SKIP REDUNDANT CHECK - We already know this is financial from the calling function
+            # This was causing the 6 emails found, 0 transactions extracted issue
+            logger.debug(f"Extracting transaction from financial email: {email_data.get('subject', '')[:50]}...")
+            
             content = f"{email_data.get('subject', '')} {email_data.get('snippet', '')} {email_data.get('body', '')}"
             
-            # Extract amount
+            # ✅ AGGRESSIVE AMOUNT EXTRACTION - Try multiple methods
             amount = None
             currency = "INR"
+            
+            # Method 1: Basic currency patterns (most reliable)
             for pattern in self.currency_patterns:
                 match = re.search(pattern, content)
                 if match:
                     amount_str = match.group(1).replace(',', '')
                     try:
                         amount = float(amount_str)
+                        logger.info(f"✅ Amount extracted via pattern: ₹{amount} from: {email_data.get('subject', '')[:50]}...")
                         break
                     except ValueError:
                         continue
+            
+            # Method 2: Enhanced detector (only if basic patterns fail)
+            if not amount:
+                from .enhanced_financial_detector import extract_transaction_amount_safe
+                amount, currency = extract_transaction_amount_safe(email_data)
+                if amount:
+                    logger.info(f"✅ Amount extracted via enhanced detector: ₹{amount} from: {email_data.get('subject', '')[:50]}...")
+                    
+            # Method 3: Expanded amount patterns for harder cases
+            if not amount:
+                expanded_patterns = [
+                    r'(?:amount|total|paid|charged|received|sent|transfer|debit|credit)[:\s]*[₹\$]?\s*([\d,]+\.?\d*)',
+                    r'[₹\$]\s*([\d,]+\.?\d*)',
+                    r'(?:rs|rupees|inr)[:\s]*([\d,]+\.?\d*)',
+                    r'amount[:\s]*[₹\$]?\s*([\d,]+\.?\d*)',
+                    r'([\d,]+\.?\d*)\s*(?:rs|rupees|inr)',
+                    r'(?:spent|cost|price|bill)[:\s]*[₹\$]?\s*([\d,]+\.?\d*)',
+                ]
+                
+                for pattern in expanded_patterns:
+                    match = re.search(pattern, content, re.IGNORECASE)
+                    if match:
+                        amount_str = match.group(1).replace(',', '')
+                        try:
+                            amount = float(amount_str)
+                            if amount > 0:  # Valid amount
+                                logger.info(f"✅ Amount extracted via expanded patterns: ₹{amount} from: {email_data.get('subject', '')[:50]}...")
+                                break
+                        except ValueError:
+                            continue
             
             # Special handling for subscription transactions without explicit amounts
             if not amount and any(word in content.lower() for word in ['subscription', 'recurring', 'renewal']):
@@ -496,6 +527,9 @@ class EnhancedTransactionExtractor:
                     amount = 1950.0  # Common subscription amount
             
             if not amount:
+                logger.warning(f"❌ No amount extracted from financial email: {email_data.get('subject', '')[:50]}...")
+                logger.warning(f"   Sender: {email_data.get('sender', '')[:50]}...")
+                logger.warning(f"   Content preview: {content[:100]}...")
                 return None
             
             # Extract comprehensive transaction details
@@ -898,15 +932,44 @@ class EnhancedTransactionExtractor:
         return card_details
 
 async def process_financial_transactions_from_mongodb(user_id: str) -> Dict[str, Any]:
-    """Process financial transactions from MongoDB emails"""
+    """
+    Process financial transactions from MongoDB emails
+    FIXED: Handles asyncio event loop conflicts properly
+    """
     try:
         logger.info(f"Processing financial transactions from MongoDB for user: {user_id}")
         
-        # Get all emails for the user
-        cursor = emails_collection.find({"user_id": user_id})
-        all_emails = await cursor.to_list(length=None)
+        # ✅ FIX: Create proper async context for database operations
+        import asyncio
         
-        logger.info(f"Found {len(all_emails)} total emails in MongoDB")
+        # Handle uvloop and standard asyncio loops properly
+        try:
+            loop = asyncio.get_running_loop()
+            logger.debug(f"Using existing event loop: {type(loop)}")
+        except RuntimeError:
+            logger.debug("No running event loop found")
+        
+        # Use user-specific collection via db_manager (handles sharding)
+        from .db import db_manager  # local import to avoid circular deps
+        emails_coll = await db_manager.get_collection(user_id, "emails")
+
+        # Project only the fields needed for financial extraction to minimize payload
+        projection = {
+            "_id": 0,
+            "subject": 1,
+            "snippet": 1,
+            "body": 1,
+            "sender": 1,
+            "date": 1
+        }
+
+        cursor = emails_coll.find({"user_id": user_id}, projection=projection).batch_size(200)
+
+        all_emails: List[Dict] = []
+        async for email_doc in cursor:
+            all_emails.append(email_doc)
+
+        logger.debug(f"Successfully streamed {len(all_emails)} emails from database (projection mode)")
         
         # Extract financial transactions
         extractor = EnhancedTransactionExtractor()
@@ -916,9 +979,13 @@ async def process_financial_transactions_from_mongodb(user_id: str) -> Dict[str,
         for email in all_emails:
             if extractor.is_financial_email(email):
                 financial_emails.append(email)
+                logger.info(f"📧 Processing financial email: {email.get('subject', '')[:50]}... from {email.get('sender', '')[:30]}...")
                 transaction = extractor.extract_transaction(email, user_id)
                 if transaction:
                     transactions.append(transaction)
+                    logger.info(f"✅ Transaction extracted: ₹{transaction.get('amount', 0)} from {transaction.get('merchant', 'Unknown')}")
+                else:
+                    logger.warning(f"❌ No transaction extracted from: {email.get('subject', '')[:50]}...")
         
         logger.info(f"Found {len(financial_emails)} financial emails")
         logger.info(f"Extracted {len(transactions)} transactions")
@@ -934,16 +1001,35 @@ async def process_financial_transactions_from_mongodb(user_id: str) -> Dict[str,
         # Calculate summary
         total_amount = sum(t['amount'] for t in transactions if t['amount'])
         
-        # Store in financial_transactions collection
+        # Store in financial_transactions collection with proper async handling
         financial_collection = db["financial_transactions"]
         
-        # Remove existing data for user
-        await financial_collection.delete_many({"user_id": user_id})
-        
-        # Insert new transactions
-        if transactions:
-            await financial_collection.insert_many(transactions)
-            logger.info(f"Stored {len(transactions)} transactions in database")
+        # 🔄 UPSERT transactions one-by-one (or in bulk) to avoid data loss
+        from pymongo import UpdateOne
+        bulk_ops = []
+        for txn in transactions:
+            txn_id = txn.get("id")
+            if not txn_id:
+                # Fallback: derive deterministic id from email + amount
+                import hashlib, json
+                txn_id = hashlib.md5(json.dumps(txn, sort_keys=True).encode()).hexdigest()
+                txn["id"] = txn_id
+
+            bulk_ops.append(
+                UpdateOne(
+                    {"user_id": user_id, "id": txn_id},
+                    {"$set": txn},
+                    upsert=True
+                )
+            )
+
+        if bulk_ops:
+            result = await financial_collection.bulk_write(bulk_ops, ordered=False)
+            inserted_count = result.upserted_count + result.inserted_count
+            modified_count = result.modified_count
+            logger.info(f"Upserted {inserted_count} new and modified {modified_count} existing transactions for user {user_id}")
+        else:
+            logger.info("No transactions to upsert")
         
         # Create and store summary
         summary = {
@@ -980,11 +1066,14 @@ async def process_financial_transactions_from_mongodb(user_id: str) -> Dict[str,
         summary['category_breakdown'] = payment_method_breakdown
         summary['transaction_type_breakdown'] = transaction_type_breakdown
         
-        # Store summary
+        # Upsert summary for the period
         summary_collection = db["financial_summaries"]
-        await summary_collection.delete_many({"user_id": user_id})
-        await summary_collection.insert_one(summary.copy())
-        logger.info("Stored financial summary in database")
+        await summary_collection.update_one(
+            {"user_id": user_id, "period": "all_stored_emails"},
+            {"$set": summary},
+            upsert=True
+        )
+        logger.info("Upserted financial summary in database")
         
         # Update user status
         await users_collection.update_one(

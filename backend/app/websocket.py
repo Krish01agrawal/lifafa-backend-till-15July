@@ -500,9 +500,20 @@ async def historical_sync_with_realtime_progress(client_id: str, user_id: str, a
             5
         )
         
-        # Build Gmail service
-        credentials = Credentials(token=access_token)
-        service = build('gmail', 'v1', credentials=credentials, cache_discovery=False)
+        # Build Gmail service with proper credentials for refresh
+        # Get user's refresh token from database
+        from .db import db_manager
+        users_coll = await db_manager.get_collection(user_id, "users")
+        user_data = await users_coll.find_one({"user_id": user_id})
+        refresh_token = user_data.get("refresh_token") if user_data else None
+        
+        from .gmail import build_gmail_service
+        service = build_gmail_service(
+            access_token=access_token,
+            refresh_token=refresh_token,
+            client_id=os.getenv("GOOGLE_CLIENT_ID"),
+            client_secret=os.getenv("GOOGLE_CLIENT_SECRET")
+        )
         
         # Step 2: Email Fetching (10-50%)
         await manager.send_progress_update(
