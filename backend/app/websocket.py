@@ -500,9 +500,20 @@ async def historical_sync_with_realtime_progress(client_id: str, user_id: str, a
             5
         )
         
-        # Build Gmail service
-        credentials = Credentials(token=access_token)
-        service = build('gmail', 'v1', credentials=credentials, cache_discovery=False)
+        # Build Gmail service with proper credentials for refresh
+        # Get user's refresh token from database
+        from .db import db_manager
+        users_coll = await db_manager.get_collection(user_id, "users")
+        user_data = await users_coll.find_one({"user_id": user_id})
+        refresh_token = user_data.get("refresh_token") if user_data else None
+        
+        from .gmail import build_gmail_service
+        service = build_gmail_service(
+            access_token=access_token,
+            refresh_token=refresh_token,
+            client_id=os.getenv("GOOGLE_CLIENT_ID"),
+            client_secret=os.getenv("GOOGLE_CLIENT_SECRET")
+        )
         
         # Step 2: Email Fetching (10-50%)
         await manager.send_progress_update(
@@ -625,17 +636,20 @@ async def fetch_historical_emails_with_progress(service, user_id: str, client_id
         from .gmail import fetch_gmail_emails_historical
         from datetime import datetime, timedelta
         
-        # Calculate date range
-        end_date = datetime.now() - timedelta(days=7)
-        start_date = end_date - timedelta(days=6 * 30)
+        # Calculate date range for HISTORICAL emails (excludes recent days)
+        # This is INTENTIONAL - historical sync should NOT overlap with immediate sync
+        end_date = datetime.now() - timedelta(days=7)  # Exclude recent 7 days
+        start_date = end_date - timedelta(days=6 * 30)  # Go back 6 months
         
+        # NOTE: Using 'before' here is CORRECT for historical emails
+        # This ensures no overlap with immediate emails that include today
         query = f"after:{start_date.strftime('%Y/%m/%d')} before:{end_date.strftime('%Y/%m/%d')}"
         
         # Progress updates during fetch
         await manager.send_progress_update(
             client_id, 
             "fetching_phase1", 
-            f"Scanning emails from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}...", 
+            f"Scanning historical emails from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')} (excluding recent 7 days)...", 
             15
         )
         

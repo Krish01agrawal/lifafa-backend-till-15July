@@ -47,7 +47,9 @@ from agno.tools.python import PythonTools
 
 # Load environment variables
 from dotenv import load_dotenv
-load_dotenv()
+import os
+# Load .env from parent directory (project root)
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '..', '.env'))
 
 # Import configuration
 from .config import (
@@ -2003,8 +2005,22 @@ async def process_gmail_data_for_user(user_id: str, gmail_emails: List[Dict]) ->
             )
             email_messages.append(email)
         
-        # Process with Agno agents
-        upload_result = await upload_emails_to_mem0(user_id, email_messages)
+        # Process with NEW PARALLEL SYSTEM
+        from .parallel_mem0_uploader import upload_emails_parallel_optimized
+        
+        # Convert to dict format for parallel uploader
+        emails_for_parallel = []
+        for email_msg in email_messages:
+            emails_for_parallel.append({
+                "id": email_msg.id,
+                "subject": email_msg.subject,
+                "sender": email_msg.sender,
+                "snippet": email_msg.snippet,
+                "body": email_msg.body,
+                "date": email_msg.date
+            })
+        
+        upload_result = await upload_emails_parallel_optimized(user_id, emails_for_parallel)
         
         # Update user status in database
         try:
@@ -2583,9 +2599,23 @@ async def schedule_mem0_retry(user_id: str, emails: List[EmailMessage], retry_de
     
     # Check if Mem0 is available
     if await wait_for_mem0_recovery(max_wait_time=60):
-        logger.info(f"🔄 Retrying Mem0 upload for user {user_id}")
+        logger.info(f"🔄 Retrying Mem0 upload for user {user_id} with NEW PARALLEL SYSTEM")
         try:
-            result = await upload_emails_to_mem0(user_id, emails)
+            from .parallel_mem0_uploader import upload_emails_parallel_optimized
+            
+            # Convert to dict format for parallel uploader
+            emails_for_parallel = []
+            for email_msg in emails:
+                emails_for_parallel.append({
+                    "id": email_msg.id,
+                    "subject": email_msg.subject,
+                    "sender": email_msg.sender,
+                    "snippet": email_msg.snippet,
+                    "body": email_msg.body,
+                    "date": email_msg.date
+                })
+            
+            result = await upload_emails_parallel_optimized(user_id, emails_for_parallel)
             logger.info(f"✅ Mem0 retry successful for user {user_id}: {result}")
         except Exception as e:
             logger.error(f"❌ Mem0 retry failed for user {user_id}: {e}")
