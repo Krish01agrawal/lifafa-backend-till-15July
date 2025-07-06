@@ -3131,7 +3131,7 @@ async def call_financial_processing_api(user_id: str, processing_context: str = 
     
     try:
         # Import here to avoid circular imports
-        from app.fast_financial_processor import process_financial_transactions_from_mongodb
+        from .fast_financial_processor import process_financial_transactions_from_mongodb
         
         # Call the financial processing function with extended timeout
         result = await asyncio.wait_for(
